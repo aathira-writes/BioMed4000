@@ -1,47 +1,70 @@
 import sqlite3
-from database import datetime
+from datetime import datetime
 
-db_name = "storage.db"
+DB_NAME = "med_app.db"
 
 def get_db():
-    return sqlite3.connect(db_name)
+    return sqlite3.connect(DB_NAME)
 
-def create_db():
-    connection = get_db()
-    cursor = connection.cursor() #makes "cursor obeject" bc thats how SQL commands are executed
+def init_db():
+    conn = get_db()
+    cursor = conn.cursor()
 
-    # primary key is auto incrementing, so it will automatically assign a unique ID to each user and session
-    cursor.execute("""CREATE TABLE IF NOT EXISTS users (
-        userID INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL
-    )""")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT DEFAULT 'crew'
+    )
+    """)
 
-    cursor.execute("""CREATE TABLE IF NOT EXISTS sessions (
-        sessionID INTEGER PRIMARY KEY AUTOINCREMENT,
-        userID INTEGER NOT NULL,
-        timestamp TEXT NOT NULL,
-        FOREIGN KEY (userID) REFERENCES users (userID) -- can only have sessions for existing users
-    )""")
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS sessions (
+        session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        login_time TEXT,
+        logout_time TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(user_id)
+    )
+    """)
 
-    cursor.execute("""CREATE TABLE IF NOT EXISTS conflicts(
-                   conflictID INTEGER PRIMARY KEY AUTOINCREMENT,
-                   login_user_id INTEGER NOT NULL,
-                   detected_user_id INTEGER,  -- im leaving this not null in case we want to log where no face was detected/an unrecognized face was detected
-                   timestamp TEXT NOT NULL, 
-                   FOREIGN KEY (login_user_id) REFERENCES users (userID), 
-                   FOREIGN KEY (detected_user_id) REFERENCES users (userID)
-                   )""")
-    
-    cursor.execute("""CREATE TABLE IF NOT EXSISTS transactions( 
-                   transactionID INTEGER PRIMARY KEY AUTOINCREMENT, 
-                   userID INTEGER NOT NULL, 
-                   medID INTEGER NOT NULL, 
-                   amount REAL NOT NULL, 
-                   timestamp TEXT NOT NULL, 
-                   FOREIGN KEY (userID) REFERENCES users (userID)
-                   FOREIGN KEY (medID) REFERENCES medications (medID)
-                   )""")
-    
-    connection.commit()
-    connection.close()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS conflicts (
+        conflict_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        login_user_id INTEGER,
+        detected_user_id INTEGER,
+        timestamp TEXT,
+        status TEXT DEFAULT 'unresolved',
+        notes TEXT,
+        FOREIGN KEY(login_user_id) REFERENCES users(user_id),
+        FOREIGN KEY(detected_user_id) REFERENCES users(user_id)
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS medications (
+        med_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        quantity INTEGER NOT NULL
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS transactions (
+        tx_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        med_id INTEGER,
+        amount INTEGER,
+        timestamp TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(user_id),
+        FOREIGN KEY(med_id) REFERENCES medications(med_id)
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    init_db()
+

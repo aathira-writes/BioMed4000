@@ -1,53 +1,50 @@
 import cv2
+import os
 
-MODEL_PATH = "model.yml"
+def recognize_user(model_path="model.yml"):
+    if not os.path.exists(model_path):
+        print("Model not found.")
+        return None
 
-# Load Haar cascade
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    recognizer.read(model_path)
 
-def load_model():
-    model = cv2.face.LBPHFaceRecognizer_create()
-    model.read(MODEL_PATH)
-    return model
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    cam = cv2.VideoCapture(0)
 
-def recognize_user():
-    model = load_model()
-    cap = cv2.VideoCapture(0)
-
-    print("Camera active. Look at the screen...")
+    detected_id = None
+    confidence_threshold = 50
 
     while True:
-        ret, frame = cap.read()
+        ret, frame = cam.read()
         if not ret:
-            continue
+            break
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
         faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
         for (x, y, w, h) in faces:
-            face = gray[y:y+h, x:x+w]
+            face_img = gray[y:y+h, x:x+w]
+            label, confidence = recognizer.predict(face_img)
 
-            label, confidence = model.predict(face)
+            if confidence < confidence_threshold:
+                detected_id = label
+            else:
+                detected_id = None  # unknown face
 
-            # Draw rectangle for feedback
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            cv2.putText(frame, f"ID: {label}  Conf: {confidence:.1f}",
-                        (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        (0, 255, 0), 2)
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+            cv2.putText(frame, f"ID: {detected_id}", (x, y-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
 
-            cv2.imshow("Recognition", frame)
-
-            # Return the predicted user ID
-            cap.release()
-            cv2.destroyAllWindows()
-            return label
-
-        cv2.imshow("Recognition", frame)
+        cv2.imshow("Identity Verification", frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-    cap.release()
+        if detected_id is not None:
+            break
+        frame = None  # clear frame for next capture
+
+    cam.release()
     cv2.destroyAllWindows()
-    return None
+    return detected_id

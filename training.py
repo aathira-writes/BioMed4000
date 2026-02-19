@@ -1,10 +1,10 @@
 import cv2
 import os
 
-def capture_faces(username, num_images=50):
-    # Create dataset folder if not exists
-    dataset_path = os.path.join("dataset", username)
+def capture_faces(user_id, num_images=50):
+    dataset_path = os.path.join("dataset", f"user_{user_id}")
     os.makedirs(dataset_path, exist_ok=True)
+
 
     cam = cv2.VideoCapture(0)
     face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")

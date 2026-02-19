@@ -2,6 +2,12 @@ import tkinter as tk
 from tkinter import messagebox
 from login import login, create_user
 from training import capture_faces
+from faces import recognize_user
+from identity import verify_identity
+from tkinter import messagebox
+from train_model import train_model
+import calendar 
+import datetime 
 
 # homescreen
 
@@ -9,7 +15,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("MEDICAL INVENTORY SYSTEM")
-        self.root.geometry("350x300") #make bigger???
+        self.root.geometry("700x600") #make bigger???
         self.current_user_role = None
 
 
@@ -43,6 +49,7 @@ class App:
         password_entry = tk.Entry(self.root, show="*")
         password_entry.pack()
 
+
         def attempt_login():
             username = username_entry.get()
             password = password_entry.get()
@@ -55,12 +62,24 @@ class App:
             user_id, role = result
             self.current_user_role = role
 
-            if user_id is None:
-                messagebox.showerror("Error", "Invalid username or password.")
+            messagebox.showinfo("Face Verification", "Camera will open. Please look at the camera.")
+
+            detected_id = recognize_user()
+
+            success, msg = verify_identity(user_id, detected_id)
+
+            success, msg = verify_identity(user_id, detected_id)
+
+            if success:
+                messagebox.showinfo("Access Granted", msg)
+                self.show_home_page(user_id)   #  NEW REDIRECT
             else:
-                messagebox.showinfo("Success", f"Login successful! User ID: {user_id}")
-                # TODO: Add face recognition step here
+                messagebox.showerror("Access Denied", msg)
                 self.show_main_menu()
+
+
+            self.show_main_menu()
+
 
         tk.Button(self.root, text="Login", width=20, command=attempt_login).pack(pady=10)
         tk.Button(self.root, text="Back", width=20, command=self.show_main_menu).pack()
@@ -81,7 +100,6 @@ class App:
         password_entry = tk.Entry(self.root, show="*")
         password_entry.pack()
 
-
         def save_user():
             username = username_entry.get()
             password = password_entry.get()
@@ -90,18 +108,82 @@ class App:
                 messagebox.showerror("Error", "All fields are required.")
                 return
 
-            # Step 1: Capture face images
-            messagebox.showinfo("Face Capture", "The camera will open. Be prepared to show multiple angles of your face in quick succession.")
-            capture_faces(username, num_images=50)
+            user_id = create_user(username, password)
+            if user_id is None:
+                messagebox.showerror("Error", "Username already exists.")
+                return
 
-            # Step 2: Save user to database
-            create_user(username, password)
+            messagebox.showinfo("Face Capture", "Camera will open now.")
+            capture_faces(user_id, num_images=50)
 
-            messagebox.showinfo("Success", f"User '{username}' created and face data captured.")
+            train_model()
+
+            messagebox.showinfo("Success", f"User '{username}' created.")
             self.show_main_menu()
 
-        tk.Button(self.root, text="Create User", width=20, command=save_user).pack(pady=10)
-        tk.Button(self.root, text="Back", width=20, command=self.show_main_menu).pack()
+        tk.Button(self.root, text="Create User", command=save_user).pack(pady=10)
+        tk.Button(self.root, text="Back", command=self.show_main_menu).pack()
+
+
+    def show_home_page(self, user_id):
+        self.clear_window()
+
+        # Store current user ID
+        self.current_user_id = user_id
+
+        # --- TOP BAR ---
+        top_frame = tk.Frame(self.root)
+        top_frame.pack(fill="x", pady=10)
+
+        tk.Label(
+            top_frame,
+            text=f"Logged in as: User {user_id}",
+            font=("Arial", 12, "bold")
+        ).pack(side="left", padx=10)
+
+        tk.Button(
+            top_frame,
+            text="Logout",
+            command=self.show_login_screen,
+            width=10
+        ).pack(side="right", padx=10)
+
+        # --- CALENDAR ---
+        today = datetime.date.today()
+        year = today.year
+        month = today.month
+
+        cal = calendar.monthcalendar(year, month)
+
+        cal_frame = tk.Frame(self.root)
+        cal_frame.pack(pady=20)
+
+        # Weekday headers
+        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        for i, day in enumerate(days):
+            tk.Label(
+                cal_frame,
+                text=day,
+                font=("Arial", 12, "bold"),
+                borderwidth=1,
+                relief="solid",
+                width=10,
+                height=2
+            ).grid(row=0, column=i)
+
+        # Calendar days
+        for row_idx, week in enumerate(cal, start=1):
+            for col_idx, day in enumerate(week):
+                text = "" if day == 0 else str(day)
+                tk.Label(
+                    cal_frame,
+                    text=text,
+                    font=("Arial", 12),
+                    borderwidth=1,
+                    relief="solid",
+                    width=10,
+                    height=4
+                ).grid(row=row_idx, column=col_idx)
 
 
     # this one makes the window dissapear when they pick exit

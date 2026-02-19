@@ -1,4 +1,6 @@
 from database import get_db
+import sqlite3
+
 
 def login(username, password):
     conn = get_db()
@@ -20,6 +22,8 @@ def login(username, password):
     return user_id, role
 
 
+
+
 def create_user(username, password, role="crew"):
     conn = get_db()
     cursor = conn.cursor()
@@ -30,9 +34,17 @@ def create_user(username, password, role="crew"):
             (username, password, role)
         )
         conn.commit()
-        print(f"User '{username}' created successfully.")
-    except Exception as e:
-        print("Error creating user:", e)
+        user_id = cursor.lastrowid
+        return user_id
+
+
+    except sqlite3.IntegrityError:
+        # Username already exists
+        return None
+
     finally:
         conn.close()
+
+
+
 

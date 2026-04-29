@@ -1,5 +1,40 @@
 import cv2
 import numpy as np
+import contextlib
+import os
+
+
+@contextlib.contextmanager
+def _silence_zbar():
+    """
+    Suppress ZBar assertion warnings on Windows.
+    ZBar's DLL writes via the MSVC runtime's own stderr handle, which bypasses
+    Python's fd 2 redirect, so we must also redirect at the Win32 HANDLE level.
+    """
+    import ctypes
+    kernel32       = ctypes.windll.kernel32
+    STD_ERROR      = -12
+    GENERIC_WRITE  = 0x40000000
+    OPEN_EXISTING  = 3
+
+    # Open NUL at both levels
+    nul_fd     = os.open(os.devnull, os.O_WRONLY)
+    nul_handle = kernel32.CreateFileW("NUL", GENERIC_WRITE, 0, None,
+                                      OPEN_EXISTING, 0, None)
+    # Save originals
+    saved_fd     = os.dup(2)
+    saved_handle = kernel32.GetStdHandle(STD_ERROR)
+
+    os.dup2(nul_fd, 2)
+    kernel32.SetStdHandle(STD_ERROR, nul_handle)
+    try:
+        yield
+    finally:
+        kernel32.SetStdHandle(STD_ERROR, saved_handle)
+        os.dup2(saved_fd, 2)
+        kernel32.CloseHandle(nul_handle)
+        os.close(nul_fd)
+        os.close(saved_fd)
 
 
 def scan_barcode():
@@ -60,25 +95,26 @@ def scan_barcode():
 
         gray_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Pass 1: full frame — widest net
-        barcodes = pzb.decode(gray_full, symbols=SYMBOLS)
+        with _silence_zbar():
+            # Pass 1: full frame — widest net
+            barcodes = pzb.decode(gray_full, symbols=SYMBOLS)
 
-        # Pass 2: sharpened full frame
-        if not barcodes:
-            kernel   = np.array([[-1,-1,-1],[-1,9,-1],[-1,-1,-1]])
-            barcodes = pzb.decode(cv2.filter2D(gray_full, -1, kernel), symbols=SYMBOLS)
+            # Pass 2: sharpened full frame
+            if not barcodes:
+                kernel   = np.array([[-1,-1,-1],[-1,9,-1],[-1,-1,-1]])
+                barcodes = pzb.decode(cv2.filter2D(gray_full, -1, kernel), symbols=SYMBOLS)
 
-        # Pass 3: adaptive threshold (helps with glare / uneven lighting)
-        if not barcodes:
-            thresh   = cv2.adaptiveThreshold(
-                gray_full, 255,
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, 51, 11)
-            barcodes = pzb.decode(thresh, symbols=SYMBOLS)
+            # Pass 3: adaptive threshold (helps with glare / uneven lighting)
+            if not barcodes:
+                thresh   = cv2.adaptiveThreshold(
+                    gray_full, 255,
+                    cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY, 51, 11)
+                barcodes = pzb.decode(thresh, symbols=SYMBOLS)
 
-        # Pass 4: try without symbol filter in case it's an unusual type
-        if not barcodes:
-            barcodes = pzb.decode(gray_full)
+            # Pass 4: try without symbol filter in case it's an unusual type
+            if not barcodes:
+                barcodes = pzb.decode(gray_full)
 
         detected = barcodes[0].data.decode("utf-8") if barcodes else None
 

@@ -8,7 +8,7 @@ matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from login import login, create_user, verify_admin, admin_exists
+from login import login, create_user, verify_admin, admin_exists, update_user_role
 from training import capture_faces
 from faces import recognize_user
 from identity import verify_identity
@@ -354,8 +354,10 @@ class App:
             ("Calendar",     "cal",  self.show_calendar_content),
             ("Profile",      "pro",  self.show_profile_content),
         ]
-        if self.current_user_role in ("medic", "admin"):
+        if self.current_user_role == "medic":
             items.append(("Medical Docs", "med", self.show_medical_docs_content))
+        if self.current_user_role == "admin":
+            items.append(("Manage Users", "usr", self.show_manage_users_content))
         for label, key, cmd in items:
             b = tk.Button(nav, text=label,
                           command=lambda k=key, c=cmd: [self._set_active(k), c()],
@@ -987,6 +989,12 @@ class App:
                   bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
                   relief="flat", padx=12, pady=6, cursor="hand2").pack(padx=16, fill="x")
 
+        tk.Button(prof_f, text="  Identify Pill Imprint",
+                  command=lambda: [self._set_active("pro"),
+                                   self.show_pill_scanner_content()],
+                  bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
+                  relief="flat", padx=12, pady=6, cursor="hand2").pack(padx=16, fill="x", pady=(4, 0))
+
         # ── Right: activity ─────────────────────────────────────────────
         act_f = tk.Frame(layout, bg=BG)
         act_f.grid(row=0, column=1, sticky="nsew")
@@ -1034,6 +1042,12 @@ class App:
         hdr_row.pack(fill="x", pady=(0, 6))
         self._lbl(hdr_row, "Personal Medications",
                   font=("Arial", 12, "bold"), fg=TEXT, bg=BG).pack(side="left")
+        tk.Button(hdr_row, text="Identify Pill",
+                  command=lambda: [self._set_active("pro"),
+                                   self.show_pill_scanner_content()],
+                  bg=INPUT, fg=DIM, font=("Arial", 9, "bold"),
+                  relief="flat", padx=8, pady=2,
+                  cursor="hand2").pack(side="right", padx=(4, 0))
         tk.Button(hdr_row, text="Scan Barcode",
                   command=lambda: [self._set_active("pro"),
                                    self.show_barcode_scanner_content()],
@@ -1121,6 +1135,175 @@ class App:
         pm_vsb.pack(side="right", fill="y")
         pm_tree.pack(fill="both", expand=True)
         _load_pm()
+
+    # ── PILL IMPRINT SCANNER ───────────────────────────────────────────────
+
+    def show_pill_scanner_content(self):
+        import threading
+        from pill_recognition import capture_pill_frame, read_imprint, lookup_rximage
+
+        self._clear_content()
+        cf = self.content_frame
+
+        self._lbl(cf, "Pill Imprint Identifier",
+                  font=("Arial", 14, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 12))
+
+        layout = tk.Frame(cf, bg=BG)
+        layout.pack(fill="both", expand=True)
+        layout.grid_columnconfigure(0, weight=1)
+        layout.grid_columnconfigure(1, weight=2)
+        layout.grid_rowconfigure(0, weight=1)
+
+        # ── Left: instructions + trigger ────────────────────────────────
+        scan_f = tk.Frame(layout, bg=CARD)
+        scan_f.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        self._lbl(scan_f, "How to use",
+                  font=("Arial", 11, "bold"), fg=TEXT, bg=CARD).pack(anchor="w", padx=16, pady=(16, 8))
+        for step in [
+            "1. Click Open Scanner below",
+            "2. Place the pill flat under the camera",
+            "3. Keep it steady inside the circle",
+            "4. Press SPACE to capture",
+            "   Press Q to cancel",
+            "",
+            "Works best on imprinted pills",
+            "in good lighting.",
+        ]:
+            self._lbl(scan_f, step, font=("Arial", 10), fg=DIM,
+                      bg=CARD).pack(anchor="w", padx=20, pady=1)
+
+        tk.Frame(scan_f, bg=BORDER, height=1).pack(fill="x", padx=16, pady=16)
+
+        # ── Right: result panel ─────────────────────────────────────────
+        res_f = tk.Frame(layout, bg=CARD)
+        res_f.grid(row=0, column=1, sticky="nsew")
+        self._lbl(res_f, "Result",
+                  font=("Arial", 11, "bold"), fg=TEXT, bg=CARD).pack(anchor="w", padx=14, pady=(12, 8))
+
+        res_body = tk.Frame(res_f, bg=CARD)
+        res_body.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        self._lbl(res_body, "Click 'Open Scanner' to begin.",
+                  fg=DIM, bg=CARD, font=("Arial", 10)).pack(anchor="w")
+
+        def _clear_result():
+            for w in res_body.winfo_children():
+                w.destroy()
+
+        def _show_error(msg):
+            _clear_result()
+            self._lbl(res_body, msg, fg=RED, bg=CARD,
+                      font=("Arial", 10), wraplength=340).pack(anchor="w")
+
+        def _show_results(imprints, matches):
+            _clear_result()
+
+            if not imprints:
+                self._lbl(res_body, "No imprint text detected.",
+                          fg=DIM, bg=CARD, font=("Arial", 10)).pack(anchor="w")
+                self._lbl(res_body,
+                          "Try better lighting or hold the pill flatter.",
+                          fg=DIM, bg=CARD, font=("Arial", 9, "italic")).pack(anchor="w", pady=(4, 0))
+                tk.Button(res_body, text="Try Again", command=do_scan,
+                          bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
+                          relief="flat", padx=12, pady=5,
+                          cursor="hand2").pack(anchor="w", pady=(10, 0))
+                return
+
+            self._lbl(res_body, "Detected Imprint",
+                      font=("Arial", 9), fg=DIM, bg=CARD).pack(anchor="w")
+            self._lbl(res_body, "  ·  ".join(imprints),
+                      font=("Arial", 13, "bold"), fg=YELLOW,
+                      bg=CARD).pack(anchor="w", pady=(2, 10))
+
+            if not matches:
+                self._lbl(res_body, "No matching pills found in NIH database.",
+                          fg=DIM, bg=CARD, font=("Arial", 10)).pack(anchor="w")
+            else:
+                self._lbl(res_body,
+                          f"{len(matches)} match{'es' if len(matches) != 1 else ''} found:",
+                          font=("Arial", 9), fg=DIM, bg=CARD).pack(anchor="w", pady=(0, 6))
+
+                for m in matches[:4]:
+                    name        = m.get("name", "Unknown")
+                    ingredients = ", ".join(m.get("ingredients", [])) or "—"
+                    colors      = ", ".join(m.get("colors",      [])) or "—"
+                    shapes      = ", ".join(m.get("shapes",      [])) or "—"
+                    imprint_val = m.get("imprint", "—")
+
+                    card = tk.Frame(res_body, bg=INPUT)
+                    card.pack(fill="x", pady=(0, 6))
+
+                    self._lbl(card, name,
+                              font=("Arial", 11, "bold"), fg=TEXT,
+                              bg=INPUT).pack(anchor="w", padx=10, pady=(8, 2))
+
+                    for label, value in [
+                        ("Imprint",     imprint_val),
+                        ("Ingredients", ingredients),
+                        ("Color",       colors),
+                        ("Shape",       shapes),
+                    ]:
+                        row = tk.Frame(card, bg=INPUT)
+                        row.pack(fill="x", padx=10, pady=1)
+                        self._lbl(row, f"{label}:", font=("Arial", 9),
+                                  fg=DIM, bg=INPUT).pack(side="left")
+                        self._lbl(row, value, font=("Arial", 9),
+                                  fg=TEXT, bg=INPUT,
+                                  wraplength=260, justify="left").pack(side="left", padx=(6, 0))
+                    tk.Frame(card, bg=INPUT, height=6).pack()
+
+            tk.Button(res_body, text="Scan Again", command=do_scan,
+                      bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
+                      relief="flat", padx=12, pady=5,
+                      cursor="hand2").pack(anchor="w", pady=(10, 0))
+
+        def _run_recognition(frame):
+            try:
+                imprints = read_imprint(frame)
+            except ImportError:
+                self.root.after(0, lambda: _show_error(
+                    "EasyOCR not installed.\nRun:  pip install easyocr"))
+                return
+
+            matches = []
+            for imp in imprints:
+                matches.extend(lookup_rximage(imp))
+
+            # Deduplicate by ndc11
+            seen_ids, unique = set(), []
+            for m in matches:
+                mid = m.get("ndc11") or m.get("id") or m.get("name", "")
+                if mid not in seen_ids:
+                    seen_ids.add(mid)
+                    unique.append(m)
+
+            self.root.after(0, lambda: _show_results(imprints, unique))
+
+        def do_scan():
+            self.root.iconify()
+            frame = capture_pill_frame()
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+
+            if frame is None:
+                _clear_result()
+                self._lbl(res_body, "Scan cancelled.",
+                          fg=DIM, bg=CARD, font=("Arial", 10)).pack(anchor="w")
+                return
+
+            _clear_result()
+            self._lbl(res_body, "Analyzing imprint...",
+                      fg=YELLOW, bg=CARD,
+                      font=("Arial", 10, "italic")).pack(anchor="w")
+            res_body.update_idletasks()
+
+            threading.Thread(target=_run_recognition, args=(frame,), daemon=True).start()
+
+        tk.Button(scan_f, text="Open Scanner", command=do_scan,
+                  bg=ACCENT, fg="white", font=("Arial", 12, "bold"),
+                  relief="flat", padx=20, pady=10, cursor="hand2").pack(padx=16, fill="x")
 
     # ── BARCODE SCANNER ────────────────────────────────────────────────────
 
@@ -1570,6 +1753,95 @@ class App:
         tk.Button(ctrl, text="Delete", command=delete_event,
                   bg=RED, fg="white", font=("Arial", 10, "bold"),
                   relief="flat", padx=10, pady=4, cursor="hand2").pack(side="left")
+
+
+    # ── MANAGE USERS ───────────────────────────────────────────────────────
+
+    def show_manage_users_content(self):
+        self._clear_content()
+        cf = self.content_frame
+
+        self._lbl(cf, "Manage Users",
+                  font=("Arial", 15, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 10))
+
+        table_wrap = tk.Frame(cf, bg=CARD)
+        table_wrap.pack(fill="both", expand=True)
+
+        col_weights = [3, 2, 3]
+        headers     = ["Username", "Current Role", "Change Role"]
+
+        hdr = tk.Frame(table_wrap, bg=ACCENT)
+        hdr.pack(fill="x")
+        for i, (text, w) in enumerate(zip(headers, col_weights)):
+            tk.Label(hdr, text=text, bg=ACCENT, fg="white",
+                     font=("Arial", 10, "bold")).grid(row=0, column=i,
+                     sticky="ew", padx=8, pady=8)
+            hdr.grid_columnconfigure(i, weight=w)
+
+        body_canvas = tk.Canvas(table_wrap, bg=CARD, highlightthickness=0)
+        vsb = ttk.Scrollbar(table_wrap, orient="vertical", command=body_canvas.yview)
+        body_canvas.configure(yscrollcommand=vsb.set)
+        body_canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        inner = tk.Frame(body_canvas, bg=CARD)
+        win   = body_canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        inner.bind("<Configure>", lambda e: body_canvas.configure(
+            scrollregion=body_canvas.bbox("all")))
+        body_canvas.bind("<Configure>", lambda e: body_canvas.itemconfig(win, width=e.width))
+
+        role_colors = {"admin": ACCENT, "medic": YELLOW, "crew": GREEN}
+        ROLES       = ["crew", "medic", "admin"]
+
+        users = get_all_users()
+
+        def _set_role(user_id, username, var, role_lbl):
+            new_role = var.get()
+            if messagebox.askyesno(
+                "Confirm",
+                f"Change '{username}' to {new_role.upper()}?"
+            ):
+                update_user_role(user_id, new_role)
+                role_lbl.config(text=new_role.upper(),
+                                fg=role_colors.get(new_role, DIM))
+                messagebox.showinfo("Updated", f"{username} is now {new_role.upper()}.")
+
+        for idx, (user_id, username, role, _) in enumerate(users):
+            row_bg = CARD if idx % 2 == 0 else "#141d27"
+            row_f  = tk.Frame(inner, bg=row_bg)
+            row_f.pack(fill="x")
+            for i, w in enumerate(col_weights):
+                row_f.grid_columnconfigure(i, weight=w)
+            tk.Frame(inner, bg=BORDER, height=1).pack(fill="x")
+
+            tk.Label(row_f, text=username, bg=row_bg, fg=TEXT,
+                     font=("Arial", 10), anchor="w").grid(
+                row=0, column=0, sticky="ew", padx=(12, 4), pady=10)
+
+            role_lbl = tk.Label(row_f, text=role.upper(),
+                                bg=row_bg, fg=role_colors.get(role, DIM),
+                                font=("Arial", 10, "bold"), anchor="center")
+            role_lbl.grid(row=0, column=1, sticky="ew", padx=4, pady=10)
+
+            ctrl = tk.Frame(row_f, bg=row_bg)
+            ctrl.grid(row=0, column=2, sticky="ew", padx=6, pady=6)
+
+            var = tk.StringVar(value=role)
+            for r in ROLES:
+                tk.Radiobutton(ctrl, text=r.capitalize(), variable=var, value=r,
+                               bg=row_bg, fg=TEXT, selectcolor=INPUT,
+                               activebackground=row_bg, activeforeground=TEXT,
+                               font=("Arial", 9)).pack(side="left", padx=4)
+
+            tk.Button(ctrl, text="Apply",
+                      command=lambda uid=user_id, un=username, v=var, lbl=role_lbl: _set_role(uid, un, v, lbl),
+                      bg=ACCENT, fg="white", font=("Arial", 9, "bold"),
+                      relief="flat", padx=8, pady=2, cursor="hand2").pack(side="left", padx=(8, 0))
+
+        if not users:
+            self._lbl(inner, "No users registered.",
+                      fg=DIM, bg=CARD, font=("Arial", 10)).pack(padx=12, pady=20)
 
 
 if __name__ == "__main__":

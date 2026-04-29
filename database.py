@@ -111,6 +111,7 @@ def init_db():
     migrations = [
         "ALTER TABLE inventory ADD COLUMN barcode TEXT",
         "ALTER TABLE users ADD COLUMN health_notes TEXT",
+        "ALTER TABLE personal_medications ADD COLUMN expiry TEXT",
     ]
     for sql in migrations:
         try:

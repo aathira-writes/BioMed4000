@@ -1,5 +1,7 @@
 from database import get_db
 from datetime import datetime, date, timedelta
+import shutil
+import os
 
 
 def add_item(name, quantity, expiration_date=None):
@@ -271,13 +273,13 @@ def get_user_checkout_history(user_id, limit=15):
     return rows
 
 
-def add_personal_medication(user_id, name, barcode=None, dosage=None, notes=None):
+def add_personal_medication(user_id, name, barcode=None, dosage=None, notes=None, expiry=None):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO personal_medications (user_id, name, barcode, dosage, notes, added_date) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, name, barcode, dosage, notes, datetime.now().isoformat())
+        "INSERT INTO personal_medications (user_id, name, barcode, dosage, notes, added_date, expiry) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, name, barcode, dosage, notes, datetime.now().isoformat(), expiry)
     )
     conn.commit()
     pm_id = cursor.lastrowid
@@ -317,6 +319,31 @@ def delete_personal_medication(pm_id):
     cursor.execute("DELETE FROM personal_medications WHERE pm_id=?", (pm_id,))
     conn.commit()
     conn.close()
+
+
+def delete_user_completely(user_id):
+    """
+    Permanently removes a user and every trace of their data:
+    - All DB rows across every table that reference user_id
+    - Their face dataset folder (dataset/user_<id>/)
+    The face recognition model will need retraining afterward.
+    """
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM personal_medications WHERE user_id=?", (user_id,))
+    cursor.execute("DELETE FROM checkout_log       WHERE user_id=?", (user_id,))
+    cursor.execute("DELETE FROM transactions       WHERE user_id=?", (user_id,))
+    cursor.execute("DELETE FROM sessions           WHERE user_id=?", (user_id,))
+    cursor.execute(
+        "DELETE FROM conflicts WHERE login_user_id=? OR detected_user_id=?",
+        (user_id, user_id))
+    cursor.execute("DELETE FROM users              WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+    face_dir = os.path.join("dataset", f"user_{user_id}")
+    if os.path.isdir(face_dir):
+        shutil.rmtree(face_dir)
 
 
 def get_all_users():

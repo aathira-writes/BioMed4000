@@ -1,203 +1,1204 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import ttk, messagebox, simpledialog
+import datetime
+import os
+import cv2
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
 from login import login, create_user
 from training import capture_faces
 from faces import recognize_user
 from identity import verify_identity
-from tkinter import messagebox
 from train_model import train_model
-import calendar 
-import datetime 
+from database import init_db
+from PIL import Image, ImageTk
+from inventory import (
+    add_item, get_all_items, get_item, edit_item, delete_item,
+    checkout_item, get_dashboard_stats, get_weekly_usage,
+    get_alerts, get_risk_level, get_depletion_forecast, get_item_forecast,
+    get_item_by_barcode, set_item_barcode,
+    get_user_checkout_history, get_health_notes, update_health_notes,
+    get_calendar_events, add_calendar_event, delete_calendar_event,
+)
 
-# homescreen
+# ── theme ──────────────────────────────────────────────────────────────────
+BG      = "#0d1117"
+CARD    = "#161b22"
+NAV     = "#010409"
+TEXT    = "#c9d1d9"
+DIM     = "#8b949e"
+ACCENT  = "#1f6feb"
+GREEN   = "#3fb950"
+YELLOW  = "#d29922"
+RED     = "#f85149"
+INPUT   = "#21262d"
+BORDER  = "#30363d"
+
 
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("MEDICAL INVENTORY SYSTEM")
-        self.root.geometry("700x600") #make bigger???
+        self.root.title("NASA HUNCH – Medical Inventory System")
+        self.root.configure(bg=BG)
+        self.root.geometry("780x560")
+        self.current_user_id   = None
         self.current_user_role = None
-
-
+        self._fig    = None
+        self._canvas = None
+        self._fig2   = None
+        self._canvas2 = None
+        self._nav_btns    = {}
+        self.content_frame = None
+        self._configure_styles()
         self.show_main_menu()
 
-   
-    # main menu
-   
+    # ── ttk theming ────────────────────────────────────────────────────────
+
+    def _configure_styles(self):
+        s = ttk.Style()
+        s.theme_use("default")
+        s.configure("Dark.Treeview",
+                    background=CARD, foreground=TEXT,
+                    fieldbackground=CARD, rowheight=26,
+                    font=("Arial", 10), borderwidth=0)
+        s.configure("Dark.Treeview.Heading",
+                    background=NAV, foreground=TEXT,
+                    font=("Arial", 10, "bold"), relief="flat")
+        s.map("Dark.Treeview", background=[("selected", ACCENT)])
+
+    # ── generic helpers ────────────────────────────────────────────────────
+
+    def clear_window(self):
+        self._close_chart()
+        for w in self.root.winfo_children():
+            w.destroy()
+        self._nav_btns = {}
+        self.content_frame = None
+
+    def _close_chart(self):
+        import matplotlib.pyplot as plt
+        if self._fig is not None:
+            plt.close(self._fig)
+            self._fig = None
+            self._canvas = None
+        if self._fig2 is not None:
+            plt.close(self._fig2)
+            self._fig2 = None
+            self._canvas2 = None
+
+    def _embed_chart(self, fig, master):
+        """Embed a matplotlib figure into a Tkinter frame."""
+        canvas = FigureCanvasTkAgg(fig, master=master)
+        widget = canvas.get_tk_widget()
+        widget.config(bg=CARD)
+        widget.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        canvas.draw()
+        return canvas
+
+    def _clear_content(self):
+        self._close_chart()
+        self.root.unbind_all("<MouseWheel>")
+        if self.content_frame:
+            for w in self.content_frame.winfo_children():
+                w.destroy()
+
+    def _lbl(self, parent, text, font=("Arial", 11), fg=TEXT, bg=None, **kw):
+        b = bg if bg is not None else self._bg(parent)
+        return tk.Label(parent, text=text, font=font, fg=fg, bg=b, **kw)
+
+    def _bg(self, widget):
+        try:
+            return widget.cget("bg")
+        except Exception:
+            return BG
+
+    def _dark_btn(self, parent, text, cmd, color=ACCENT, fg="white", **pack_kw):
+        b = tk.Button(parent, text=text, command=cmd,
+                      bg=color, fg=fg, font=("Arial", 10, "bold"),
+                      relief="flat", bd=0, padx=12, pady=6,
+                      activebackground=color, activeforeground=fg, cursor="hand2")
+        b.pack(**pack_kw)
+        return b
+
+    def _field(self, parent, label, default="", show=None):
+        self._lbl(parent, label, fg=DIM, bg=self._bg(parent),
+                  font=("Arial", 10)).pack(anchor="w", pady=(10, 2))
+        e = tk.Entry(parent, bg=INPUT, fg=TEXT, insertbackground=TEXT,
+                     relief="flat", font=("Arial", 11), bd=6, width=34)
+        if show:
+            e.config(show=show)
+        e.insert(0, default)
+        e.pack(anchor="w")
+        return e
+
+    # ── PRE-LOGIN SCREENS ──────────────────────────────────────────────────
+
     def show_main_menu(self):
         self.clear_window()
+        self.root.geometry("780x560")
 
-        tk.Label(self.root, text="BioMed Access System", font=("Arial", 16)).pack(pady=20)
+        frame = tk.Frame(self.root, bg=BG)
+        frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Button(self.root, text="Login", width=20, command=self.show_login).pack(pady=10)
-        tk.Button(self.root, text="Create New User", width=20, command=self.show_create_user).pack(pady=10)
-        tk.Button(self.root, text="Exit", width=20, command=self.root.quit).pack(pady=10)
+        self._lbl(frame, "★  NASA HUNCH", font=("Arial", 12), fg=DIM, bg=BG).pack(pady=(0, 6))
+        self._lbl(frame, "Medical Inventory System",
+                  font=("Arial", 22, "bold"), fg=TEXT, bg=BG).pack(pady=(0, 32))
 
-
-    # login screen
+        self._dark_btn(frame, "Login",         self.show_login,
+                       fill="x", pady=(0, 8))
+        self._dark_btn(frame, "Create User",   self.show_create_user,
+                       color=INPUT, fill="x", pady=(0, 8))
+        self._dark_btn(frame, "Exit",          self.root.quit,
+                       color="#2d1b1b", fg=RED, fill="x")
 
     def show_login(self):
         self.clear_window()
 
-        tk.Label(self.root, text="Login", font=("Arial", 16)).pack(pady=20)
+        frame = tk.Frame(self.root, bg=BG)
+        frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(self.root, text="Username").pack()
-        username_entry = tk.Entry(self.root)
-        username_entry.pack()
+        self._lbl(frame, "Login", font=("Arial", 20, "bold"), fg=TEXT, bg=BG).pack(pady=(0, 24))
 
-        tk.Label(self.root, text="Password").pack()
-        password_entry = tk.Entry(self.root, show="*")
-        password_entry.pack()
-
+        user_e = self._field(frame, "Username / Crew ID")
+        pass_e = self._field(frame, "Password", show="*")
 
         def attempt_login():
-            username = username_entry.get()
-            password = password_entry.get()
-
+            username = user_e.get().strip()
+            password = pass_e.get()
             result = login(username, password)
             if result is None:
-                messagebox.showerror("Error", "Invalid username or password.")
+                messagebox.showerror("Login Failed", "Invalid username or password.")
                 return
-
             user_id, role = result
-            self.current_user_role = role
-
-            messagebox.showinfo("Face Verification", "Camera will open. Please look at the camera.")
-
+            if not os.path.exists("model.yml"):
+                messagebox.showerror(
+                    "Face Model Missing",
+                    "No face recognition model found.\n"
+                    "Please create your user account again so your face can be registered."
+                )
+                return
+            messagebox.showinfo("Face Verification",
+                                "Password verified.\nCamera will open – please look at the camera.\n"
+                                "Press 'q' if you need to cancel.")
             detected_id = recognize_user()
-
             success, msg = verify_identity(user_id, detected_id)
-
-            success, msg = verify_identity(user_id, detected_id)
-
             if success:
                 messagebox.showinfo("Access Granted", msg)
-                self.show_home_page(user_id)   #  NEW REDIRECT
+                self.show_home_page(user_id, role)
             else:
                 messagebox.showerror("Access Denied", msg)
-                self.show_main_menu()
 
-
-            self.show_main_menu()
-
-
-        tk.Button(self.root, text="Login", width=20, command=attempt_login).pack(pady=10)
-        tk.Button(self.root, text="Back", width=20, command=self.show_main_menu).pack()
-
-
-    # create user
+        self._dark_btn(frame, "Login",   attempt_login, fill="x", pady=(20, 8))
+        self._dark_btn(frame, "← Back",  self.show_main_menu, color=INPUT, fill="x")
 
     def show_create_user(self):
         self.clear_window()
 
-        tk.Label(self.root, text="Create New User", font=("Arial", 16)).pack(pady=20)
+        frame = tk.Frame(self.root, bg=BG)
+        frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(self.root, text="Username").pack()
-        username_entry = tk.Entry(self.root)
-        username_entry.pack()
+        self._lbl(frame, "Create New User",
+                  font=("Arial", 20, "bold"), fg=TEXT, bg=BG).pack(pady=(0, 24))
 
-        tk.Label(self.root, text="Password").pack()
-        password_entry = tk.Entry(self.root, show="*")
-        password_entry.pack()
+        user_e = self._field(frame, "Username / Crew ID")
+        pass_e = self._field(frame, "Password", show="*")
+
+        self._lbl(frame, "Role", fg=DIM, bg=BG, font=("Arial", 10)).pack(anchor="w", pady=(10, 4))
+        role_var = tk.StringVar(value="crew")
+        role_row = tk.Frame(frame, bg=BG)
+        role_row.pack(anchor="w")
+        for val, label in [("crew", "Crew"), ("admin", "Admin")]:
+            tk.Radiobutton(role_row, text=label, variable=role_var, value=val,
+                           bg=BG, fg=TEXT, selectcolor=INPUT,
+                           activebackground=BG, font=("Arial", 10)).pack(side="left", padx=(0, 14))
 
         def save_user():
-            username = username_entry.get()
-            password = password_entry.get()
-
+            username = user_e.get().strip()
+            password = pass_e.get()
             if not username or not password:
                 messagebox.showerror("Error", "All fields are required.")
                 return
-
-            user_id = create_user(username, password)
+            user_id = create_user(username, password, role_var.get())
             if user_id is None:
                 messagebox.showerror("Error", "Username already exists.")
                 return
-
-            messagebox.showinfo("Face Capture", "Camera will open now.")
+            messagebox.showinfo("Face Capture",
+                                "Camera will open to register your face.\nPress 'q' when done.")
             capture_faces(user_id, num_images=50)
-
             train_model()
-
-            messagebox.showinfo("Success", f"User '{username}' created.")
+            messagebox.showinfo("Success", f"User '{username}' created and face registered.")
             self.show_main_menu()
 
-        tk.Button(self.root, text="Create User", command=save_user).pack(pady=10)
-        tk.Button(self.root, text="Back", command=self.show_main_menu).pack()
+        self._dark_btn(frame, "Create User", save_user, fill="x", pady=(20, 8))
+        self._dark_btn(frame, "← Back", self.show_main_menu, color=INPUT, fill="x")
 
+    # ── POST-LOGIN LAYOUT ──────────────────────────────────────────────────
 
-    def show_home_page(self, user_id):
+    def show_home_page(self, user_id, role):
         self.clear_window()
+        self.current_user_id   = user_id
+        self.current_user_role = role
+        self.root.geometry("1160x730")
+        self._build_header()
+        self._build_nav()
+        self.content_frame = tk.Frame(self.root, bg=BG)
+        self.content_frame.pack(fill="both", expand=True, padx=12, pady=(8, 12))
+        self.show_dashboard_content()
 
-        # Store current user ID
-        self.current_user_id = user_id
+    def _build_header(self):
+        hdr = tk.Frame(self.root, bg=CARD, height=52)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        self._lbl(hdr, "NASA HUNCH  |  Medical Inventory System",
+                  font=("Arial", 13, "bold"), fg=TEXT, bg=CARD).pack(side="left", padx=16, pady=12)
+        tk.Button(hdr, text="Logout", command=self.show_main_menu,
+                  bg=RED, fg="white", font=("Arial", 10, "bold"),
+                  relief="flat", padx=12, pady=4, cursor="hand2").pack(side="right", padx=12, pady=10)
+        self._lbl(hdr,
+                  f"User {self.current_user_id}  ·  {self.current_user_role.upper()}",
+                  fg=DIM, bg=CARD, font=("Arial", 10)).pack(side="right", padx=4, pady=12)
 
-        # --- TOP BAR ---
-        top_frame = tk.Frame(self.root)
-        top_frame.pack(fill="x", pady=10)
+    def _build_nav(self):
+        nav = tk.Frame(self.root, bg=NAV, height=38)
+        nav.pack(fill="x")
+        nav.pack_propagate(False)
+        items = [
+            ("Dashboard", "dash", self.show_dashboard_content),
+            ("Inventory",  "inv",  self.show_inventory_content),
+            ("Calendar",   "cal",  self.show_calendar_content),
+            ("Profile",    "pro",  self.show_profile_content),
+        ]
+        for label, key, cmd in items:
+            b = tk.Button(nav, text=label,
+                          command=lambda k=key, c=cmd: [self._set_active(k), c()],
+                          bg=NAV, fg=DIM, font=("Arial", 10),
+                          relief="flat", bd=0, padx=20,
+                          activebackground=CARD, activeforeground=TEXT, cursor="hand2")
+            b.pack(side="left", fill="y")
+            self._nav_btns[key] = b
+        self._set_active("dash")
 
-        tk.Label(
-            top_frame,
-            text=f"Logged in as: User {user_id}",
-            font=("Arial", 12, "bold")
-        ).pack(side="left", padx=10)
+    def _set_active(self, key):
+        for k, b in self._nav_btns.items():
+            b.config(bg=ACCENT if k == key else NAV,
+                     fg="white" if k == key else DIM)
 
-        tk.Button(
-            top_frame,
-            text="Logout",
-            command=self.show_login_screen,
-            width=10
-        ).pack(side="right", padx=10)
+    # ── DASHBOARD ──────────────────────────────────────────────────────────
 
-        # --- CALENDAR ---
+    def show_dashboard_content(self):
+        self._clear_content()
+        cf = self.content_frame
+        stats = get_dashboard_stats()
+        risk_label, risk_color = get_risk_level()
+        alerts = get_alerts()
+
+        # KPI cards
+        cards_row = tk.Frame(cf, bg=BG)
+        cards_row.pack(fill="x", pady=(0, 12))
+        for label, value, color in [
+            ("Total Supplies",  stats["total"],     ACCENT),
+            ("Low Stock Items", stats["low_stock"],  YELLOW),
+            ("Expired Items",   stats["expired"],    RED),
+            ("Total Checkouts", stats["checkouts"],  GREEN),
+        ]:
+            self._kpi_card(cards_row, label, value, color)
+
+        # Bottom: two stacked charts on left, status+alerts on right
+        bottom = tk.Frame(cf, bg=BG)
+        bottom.pack(fill="both", expand=True)
+        bottom.grid_columnconfigure(0, weight=3)
+        bottom.grid_columnconfigure(1, weight=1)
+        bottom.grid_rowconfigure(0, weight=2)   # weekly chart — taller
+        bottom.grid_rowconfigure(1, weight=1)   # forecast chart — shorter
+
+        # ── Weekly usage chart (top-left) ──────────────────────────────
+        weekly_f = tk.Frame(bottom, bg=CARD)
+        weekly_f.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(0, 4))
+        self._lbl(weekly_f, "Weekly Medical Usage",
+                  font=("Arial", 11, "bold"), fg=TEXT, bg=CARD).pack(anchor="w", padx=12, pady=(10, 2))
+
+        weekly = get_weekly_usage()
+        days   = [d for d, _ in weekly]
+        counts = [c for _, c in weekly]
+
+        self._fig = Figure(figsize=(8, 3), facecolor=CARD)
+        self._fig.set_tight_layout({"pad": 1.5})
+        ax = self._fig.add_subplot(111)
+        ax.set_facecolor(CARD)
+        ax.plot(days, counts, color=ACCENT, linewidth=2, marker="o", markersize=5)
+        ax.fill_between(range(len(days)), counts, alpha=0.12, color=ACCENT)
+        ax.set_xticks(range(len(days)))
+        ax.set_xticklabels(days)
+        ax.tick_params(colors=DIM, labelsize=8)
+        ax.set_ylabel("Items Used", color=DIM, fontsize=8)
+        for spine in ax.spines.values():
+            spine.set_edgecolor(BORDER)
+
+        self._canvas = self._embed_chart(self._fig, weekly_f)
+
+        # ── Predictive supply forecast (bottom-left) ───────────────────
+        forecast_f = tk.Frame(bottom, bg=CARD)
+        forecast_f.grid(row=1, column=0, sticky="nsew", padx=(0, 8), pady=(4, 0))
+
+        # Title + search row
+        top_row = tk.Frame(forecast_f, bg=CARD)
+        top_row.pack(fill="x", padx=12, pady=(10, 6))
+        self._lbl(top_row, "Predictive Supply Forecast",
+                  font=("Arial", 11, "bold"), fg=TEXT, bg=CARD).pack(side="left")
+
+        all_inv   = get_all_items()
+        item_names = [r[1] for r in all_inv]
+        item_map   = {r[1]: r[0] for r in all_inv}   # name → item_id
+
+        search_row = tk.Frame(forecast_f, bg=CARD)
+        search_row.pack(fill="x", padx=12, pady=(0, 6))
+        self._lbl(search_row, "Focus on item:", fg=DIM, bg=CARD,
+                  font=("Arial", 10)).pack(side="left", padx=(0, 8))
+
+        entry_var = tk.StringVar()
+        entry = tk.Entry(search_row, textvariable=entry_var, bg=INPUT, fg=TEXT,
+                         insertbackground=TEXT, relief="flat", font=("Arial", 10),
+                         bd=6, width=28)
+        entry.pack(side="left", padx=(0, 6))
+
+        tk.Button(search_row, text="✕",
+                  command=lambda: [entry_var.set(""), _hide_popup(), _show_overview()],
+                  bg=INPUT, fg=DIM, font=("Arial", 9), relief="flat",
+                  padx=6, pady=1, cursor="hand2").pack(side="left")
+
+        _popup = {"win": None}
+
+        def _hide_popup():
+            if _popup["win"] and _popup["win"].winfo_exists():
+                _popup["win"].destroy()
+            _popup["win"] = None
+
+        def _show_popup(matches):
+            _hide_popup()
+            if not matches:
+                return
+            entry.update_idletasks()
+            x = entry.winfo_rootx()
+            y = entry.winfo_rooty() + entry.winfo_height() + 2
+            w = max(entry.winfo_width(), 200)
+            h = min(len(matches) * 26, 156)
+
+            win = tk.Toplevel(self.root)
+            win.wm_overrideredirect(True)
+            win.geometry(f"{w}x{h}+{x}+{y}")
+            win.config(bg=BORDER)
+            _popup["win"] = win
+
+            lb = tk.Listbox(win, bg=INPUT, fg=TEXT, font=("Arial", 10),
+                            selectbackground=ACCENT, selectforeground="white",
+                            relief="flat", bd=0, activestyle="none",
+                            highlightthickness=1, highlightbackground=BORDER)
+            vsb = ttk.Scrollbar(win, orient="vertical", command=lb.yview)
+            lb.configure(yscrollcommand=vsb.set)
+            if len(matches) > 6:
+                vsb.pack(side="right", fill="y")
+            lb.pack(fill="both", expand=True)
+
+            for m in matches:
+                lb.insert("end", f"  {m}")
+
+            def _pick(event=None):
+                sel = lb.curselection()
+                if not sel:
+                    return
+                name = lb.get(sel[0]).strip()
+                entry_var.set(name)
+                _hide_popup()
+                if name in item_map:
+                    _show_item_detail(item_map[name], name)
+
+            lb.bind("<ButtonRelease-1>", _pick)
+            lb.bind("<Return>",          _pick)
+
+            def _nav_down(event):
+                lb.focus_set()
+                lb.selection_clear(0, "end")
+                lb.selection_set(0)
+                lb.activate(0)
+                return "break"
+
+            def _nav_up_from_list(event):
+                if event.keysym == "Up" and lb.curselection() and lb.curselection()[0] == 0:
+                    entry.focus_set()
+                    return "break"
+
+            entry.bind("<Down>", _nav_down)
+            lb.bind("<KeyPress>", _nav_up_from_list)
+            lb.bind("<Escape>", lambda e: [_hide_popup(), entry.focus_set()])
+
+        # Dynamic content area
+        detail_frame = tk.Frame(forecast_f, bg=CARD)
+        detail_frame.pack(fill="both", expand=True)
+
+        def _reset_fig2():
+            import matplotlib.pyplot as plt
+            if self._fig2 is not None:
+                plt.close(self._fig2)
+                self._fig2 = None
+                self._canvas2 = None
+            for w in detail_frame.winfo_children():
+                w.destroy()
+
+        def _show_overview():
+            _reset_fig2()
+            forecast = get_depletion_forecast()
+            self._fig2 = Figure(figsize=(8, 2), facecolor=CARD)
+            self._fig2.set_tight_layout({"pad": 1.5})
+            ax = self._fig2.add_subplot(111)
+            ax.set_facecolor(CARD)
+            if not forecast:
+                ax.text(0.5, 0.5,
+                        "No usage data yet — check out items to see the forecast",
+                        ha="center", va="center", color=DIM, fontsize=9,
+                        transform=ax.transAxes)
+                ax.set_xticks([]); ax.set_yticks([])
+            else:
+                rc = {"NOMINAL": GREEN, "CAUTION": YELLOW, "CRITICAL": RED}
+                names_  = [r[0] for r in forecast]
+                dvals   = [min(r[3], 120) for r in forecast]
+                colors_ = [rc[r[4]] for r in forecast]
+                bars = ax.barh(names_, dvals, color=colors_, height=0.5)
+                ax.axvline(x=30, color=RED,    linestyle="--", linewidth=1, alpha=0.6)
+                ax.axvline(x=60, color=YELLOW, linestyle="--", linewidth=1, alpha=0.6)
+                ax.tick_params(colors=DIM, labelsize=8)
+                ax.set_xlabel("Days of supply remaining", color=DIM, fontsize=8)
+                for spine in ax.spines.values():
+                    spine.set_edgecolor(BORDER)
+                for bar, row in zip(bars, forecast):
+                    lbl = f"{row[3]}d" if row[3] < 120 else "120d+"
+                    ax.text(bar.get_width() + 1,
+                            bar.get_y() + bar.get_height() / 2,
+                            lbl, va="center", color=DIM, fontsize=7)
+            self._canvas2 = self._embed_chart(self._fig2, detail_frame)
+
+        def _show_item_detail(item_id, name):
+            _reset_fig2()
+            info = get_item_forecast(item_id)
+            if not info:
+                return
+
+            rc_map = {"CRITICAL": RED, "CAUTION": YELLOW, "NOMINAL": GREEN, "UNKNOWN": DIM}
+            rc     = rc_map[info["risk"]]
+
+            # Left stats panel
+            stats_f = tk.Frame(detail_frame, bg=CARD, padx=14)
+            stats_f.pack(side="left", fill="y", pady=10)
+
+            self._lbl(stats_f, name,
+                      font=("Arial", 12, "bold"), fg=TEXT, bg=CARD).pack(anchor="w")
+            self._lbl(stats_f, f"●  {info['risk']}",
+                      font=("Arial", 11, "bold"), fg=rc, bg=CARD).pack(anchor="w", pady=(4, 10))
+
+            stat_rows = [
+                ("Current Stock",   f"{info['qty']} units"),
+                ("Avg Daily Usage",
+                 f"{info['avg_daily']} units / day" if info["avg_daily"] > 0 else "No history"),
+                ("Days Remaining",
+                 f"{info['days']} days" if info["days"] is not None else "—"),
+            ]
+            for label, value in stat_rows:
+                self._lbl(stats_f, label,
+                          font=("Arial", 9), fg=DIM, bg=CARD).pack(anchor="w", pady=(4, 0))
+                self._lbl(stats_f, value,
+                          font=("Arial", 11, "bold"), fg=TEXT, bg=CARD).pack(anchor="w")
+
+            # Right projection chart
+            chart_f = tk.Frame(detail_frame, bg=CARD)
+            chart_f.pack(side="left", fill="both", expand=True)
+
+            self._fig2 = Figure(figsize=(6, 2), facecolor=CARD)
+            self._fig2.set_tight_layout({"pad": 1.5})
+            ax = self._fig2.add_subplot(111)
+            ax.set_facecolor(CARD)
+
+            if info["avg_daily"] > 0 and info["days"] is not None:
+                end_day = min(info["days"] + 14, 120)
+                x = list(range(end_day + 1))
+                y = [max(0.0, info["qty"] - info["avg_daily"] * d) for d in x]
+                ax.plot(x, y, color=ACCENT, linewidth=2)
+                ax.fill_between(x, y, alpha=0.12, color=ACCENT)
+                ax.axvline(x=30, color=RED,    linestyle="--", linewidth=1, alpha=0.5)
+                ax.axvline(x=60, color=YELLOW, linestyle="--", linewidth=1, alpha=0.5)
+                if info["days"] <= end_day:
+                    ax.axvline(x=info["days"], color=RED, linewidth=1.5, alpha=0.9)
+                    ax.text(info["days"] + 1, max(y) * 0.55,
+                            f"Depletes ~{info['days']}d",
+                            color=RED, fontsize=7)
+                ax.set_xlabel("Days from now", color=DIM, fontsize=8)
+                ax.set_ylabel("Stock",         color=DIM, fontsize=8)
+            else:
+                ax.text(0.5, 0.5, "No checkout history — cannot project depletion",
+                        ha="center", va="center", color=DIM, fontsize=9,
+                        transform=ax.transAxes)
+                ax.set_xticks([]); ax.set_yticks([])
+
+            ax.tick_params(colors=DIM, labelsize=8)
+            for spine in ax.spines.values():
+                spine.set_edgecolor(BORDER)
+            self._canvas2 = self._embed_chart(self._fig2, chart_f)
+
+        def _on_keyrelease(event=None):
+            if event and event.keysym in ("Return", "Up", "Down", "Tab"):
+                return
+            if event and event.keysym == "Escape":
+                entry_var.set("")
+                _hide_popup()
+                _show_overview()
+                return
+            typed = entry_var.get().strip()
+            if typed:
+                matches = [n for n in item_names if typed.lower() in n.lower()]
+                _show_popup(matches)
+            else:
+                _hide_popup()
+                _show_overview()
+
+        def _on_confirm(event=None):
+            name = entry_var.get().strip()
+            _hide_popup()
+            if name in item_map:
+                _show_item_detail(item_map[name], name)
+            else:
+                _show_overview()
+
+        entry.bind("<KeyRelease>", _on_keyrelease)
+        entry.bind("<Return>",     _on_confirm)
+        entry.bind("<FocusOut>",   lambda e: self.root.after(200, _hide_popup))
+        forecast_f.bind("<Destroy>", lambda e: _hide_popup())
+
+        _show_overview()
+
+        # ── Right column: status + alerts (spans both rows) ────────────
+        right = tk.Frame(bottom, bg=BG)
+        right.grid(row=0, column=1, rowspan=2, sticky="nsew")
+
+        # Risk status card
+        risk_card = tk.Frame(right, bg=CARD)
+        risk_card.pack(fill="x", pady=(0, 8))
+        self._lbl(risk_card, "System Status",
+                  font=("Arial", 10), fg=DIM, bg=CARD).pack(anchor="w", padx=12, pady=(10, 2))
+        self._lbl(risk_card, f"●  {risk_label}",
+                  font=("Arial", 17, "bold"), fg=risk_color, bg=CARD).pack(anchor="w", padx=12, pady=(0, 12))
+
+        # Alerts card
+        alert_card = tk.Frame(right, bg=CARD)
+        alert_card.pack(fill="both", expand=True)
+        self._lbl(alert_card, "Alerts",
+                  font=("Arial", 10), fg=DIM, bg=CARD).pack(anchor="w", padx=12, pady=(10, 4))
+
+        alerts_inner = tk.Frame(alert_card, bg=CARD)
+        alerts_inner.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        if not alerts:
+            self._lbl(alerts_inner, "✓  No active alerts", fg=GREEN, bg=CARD,
+                      font=("Arial", 10)).pack(anchor="w", pady=4)
+        else:
+            for kind, msg in alerts:
+                color = RED if kind == "expired" else YELLOW
+                self._lbl(alerts_inner, f"• {msg}", fg=color, bg=CARD,
+                          font=("Arial", 9), wraplength=240,
+                          justify="left").pack(anchor="w", pady=2)
+
+    def _kpi_card(self, parent, label, value, color):
+        card = tk.Frame(parent, bg=CARD, padx=16, pady=10)
+        card.pack(side="left", fill="both", expand=True, padx=4)
+        tk.Frame(card, bg=color, height=3).pack(fill="x", pady=(0, 8))
+        self._lbl(card, str(value),
+                  font=("Arial", 28, "bold"), fg=color, bg=CARD).pack(anchor="w")
+        self._lbl(card, label,
+                  font=("Arial", 10), fg=DIM, bg=CARD).pack(anchor="w")
+
+    # ── INVENTORY ──────────────────────────────────────────────────────────
+
+    def _placeholder_entry(self, parent, placeholder, width=18):
+        e = tk.Entry(parent, bg=INPUT, fg=DIM, insertbackground=TEXT,
+                     relief="flat", font=("Arial", 10), bd=6, width=width)
+        e.insert(0, placeholder)
+
+        def on_in(event):
+            if e.get() == placeholder:
+                e.delete(0, "end")
+                e.config(fg=TEXT)
+
+        def on_out(event):
+            if not e.get().strip():
+                e.insert(0, placeholder)
+                e.config(fg=DIM)
+
+        e.bind("<FocusIn>",  on_in)
+        e.bind("<FocusOut>", on_out)
+        return e
+
+    def show_inventory_content(self):
+        self._clear_content()
+        cf       = self.content_frame
+        is_admin = (self.current_user_role == "admin")
+
+        self._lbl(cf, "Inventory Management",
+                  font=("Arial", 16, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 10))
+
+        # ── inline add form (admin only) ──────────────────────────────────
+        if is_admin:
+            add_bar = tk.Frame(cf, bg=CARD, padx=14, pady=12)
+            add_bar.pack(fill="x", pady=(0, 10))
+
+            name_e = self._placeholder_entry(add_bar, "Item Name",  width=22)
+            name_e.pack(side="left", padx=(0, 6))
+            qty_e  = self._placeholder_entry(add_bar, "Quantity",   width=10)
+            qty_e.pack(side="left", padx=(0, 6))
+            exp_e  = self._placeholder_entry(add_bar, "MM/DD/YYYY", width=13)
+            exp_e.pack(side="left", padx=(0, 10))
+
+            def do_add():
+                name    = name_e.get().strip()
+                qty_str = qty_e.get().strip()
+                exp_str = exp_e.get().strip()
+                if name in ("", "Item Name"):
+                    messagebox.showerror("Error", "Item name is required.")
+                    return
+                if qty_str in ("", "Quantity"):
+                    messagebox.showerror("Error", "Quantity is required.")
+                    return
+                try:
+                    qty = int(qty_str)
+                except ValueError:
+                    messagebox.showerror("Error", "Quantity must be a whole number.")
+                    return
+                exp_date = None
+                if exp_str and exp_str != "MM/DD/YYYY":
+                    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+                        try:
+                            exp_date = datetime.datetime.strptime(exp_str, fmt).strftime("%Y-%m-%d")
+                            break
+                        except ValueError:
+                            continue
+                    if exp_date is None:
+                        messagebox.showerror("Error", "Date format: MM/DD/YYYY")
+                        return
+                add_item(name, qty, exp_date)
+                self.show_inventory_content()
+
+            tk.Button(add_bar, text="Add Item", command=do_add,
+                      bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
+                      relief="flat", padx=14, pady=5, cursor="hand2").pack(side="left")
+
+        # ── table: fixed header + scrollable body ────────────────────────
+        col_weights = [4, 1, 2, 2, 3]
+        headers     = ["Item Name", "Quantity", "Expiration Date", "Checked Out", "Actions"]
+        VSB_W       = 17  # scrollbar width reserved in header
+
+        table_wrap = tk.Frame(cf, bg=CARD)
+        table_wrap.pack(fill="both", expand=True)
+
+        # Fixed header row (never scrolls)
+        hdr = tk.Frame(table_wrap, bg=ACCENT)
+        hdr.pack(fill="x")
+        for i, (text, w) in enumerate(zip(headers, col_weights)):
+            tk.Label(hdr, text=text, bg=ACCENT, fg="white",
+                     font=("Arial", 10, "bold")).grid(row=0, column=i,
+                     sticky="ew", padx=8, pady=8)
+            hdr.grid_columnconfigure(i, weight=w)
+        # Placeholder to stay aligned with scrollbar when it appears
+        vsb_spacer = tk.Frame(hdr, bg=ACCENT, width=0)
+        vsb_spacer.grid(row=0, column=len(headers), sticky="ns")
+
+        # Scrollable body
+        body = tk.Frame(table_wrap, bg=CARD)
+        body.pack(fill="both", expand=True)
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(body, bg=CARD, highlightthickness=0)
+        vsb    = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        # vsb starts hidden; shown only when content overflows
+
+        inner = tk.Frame(canvas, bg=CARD)
+        win   = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_mousewheel(e):
+            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+        def _check_overflow(event=None):
+            canvas.update_idletasks()
+            need_scroll = inner.winfo_reqheight() > canvas.winfo_height()
+            if need_scroll:
+                vsb.grid(row=0, column=1, sticky="ns")
+                vsb_spacer.configure(width=VSB_W)
+                canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            else:
+                vsb.grid_remove()
+                vsb_spacer.configure(width=0)
+                canvas.unbind_all("<MouseWheel>")
+
+        inner.bind("<Configure>", lambda e: [
+            canvas.configure(scrollregion=canvas.bbox("all")),
+            canvas.after(10, _check_overflow)
+        ])
+        canvas.bind("<Configure>", lambda e: [
+            canvas.itemconfig(win, width=e.width),
+            canvas.after(10, _check_overflow)
+        ])
+
+        # Data rows (same column weights as header → columns align)
+        items = get_all_items()
+        if not items:
+            tk.Label(inner, text="No items in inventory.",
+                     bg=CARD, fg=DIM, font=("Arial", 10)).pack(pady=20)
+        else:
+            for idx, item in enumerate(items):
+                item_id, name, qty, exp, checked_out, _ = item
+                row_bg = CARD if idx % 2 == 0 else "#141d27"
+                qty_fg = RED if qty == 0 else (YELLOW if qty <= 5 else TEXT)
+
+                row_f = tk.Frame(inner, bg=row_bg)
+                row_f.pack(fill="x")
+                for i, w in enumerate(col_weights):
+                    row_f.grid_columnconfigure(i, weight=w)
+                tk.Frame(inner, bg=BORDER, height=1).pack(fill="x")
+
+                tk.Label(row_f, text=name,             bg=row_bg, fg=TEXT,   font=("Arial", 10), anchor="w"     ).grid(row=0, column=0, sticky="ew", padx=(12, 4), pady=8)
+                tk.Label(row_f, text=str(qty),          bg=row_bg, fg=qty_fg, font=("Arial", 10), anchor="center").grid(row=0, column=1, sticky="ew", padx=4,       pady=8)
+                tk.Label(row_f, text=exp or "-",        bg=row_bg, fg=TEXT,   font=("Arial", 10), anchor="center").grid(row=0, column=2, sticky="ew", padx=4,       pady=8)
+                tk.Label(row_f, text=str(checked_out),  bg=row_bg, fg=TEXT,   font=("Arial", 10), anchor="center").grid(row=0, column=3, sticky="ew", padx=4,       pady=8)
+
+                btn_f = tk.Frame(row_f, bg=row_bg)
+                btn_f.grid(row=0, column=4, sticky="ew", padx=6, pady=5)
+
+                def _checkout(iid=item_id, q=qty):
+                    amt = simpledialog.askinteger(
+                        "Checkout", f"Amount (available: {q}):", minvalue=1, parent=self.root)
+                    if not amt:
+                        return
+                    ok, msg = checkout_item(iid, self.current_user_id, amt)
+                    if ok:
+                        self.show_inventory_content()
+                    messagebox.showinfo("Checkout", msg) if ok else messagebox.showerror("Error", msg)
+
+                tk.Button(btn_f, text="Checkout", command=_checkout,
+                          bg=GREEN, fg="white", font=("Arial", 9, "bold"),
+                          relief="flat", padx=8, pady=3, cursor="hand2").pack(side="left", padx=2)
+
+                if is_admin:
+                    tk.Button(btn_f, text="Edit",
+                              command=lambda iid=item_id: self._show_item_form(iid),
+                              bg="#cc8800", fg="white", font=("Arial", 9, "bold"),
+                              relief="flat", padx=8, pady=3, cursor="hand2").pack(side="left", padx=2)
+
+                    def _delete(iid=item_id, n=name):
+                        if messagebox.askyesno("Delete", f"Delete '{n}'?"):
+                            delete_item(iid)
+                            self.show_inventory_content()
+
+                    tk.Button(btn_f, text="Delete", command=_delete,
+                              bg=RED, fg="white", font=("Arial", 9, "bold"),
+                              relief="flat", padx=8, pady=3, cursor="hand2").pack(side="left", padx=2)
+
+    def _show_item_form(self, item_id=None):
+        self._clear_content()
+        cf       = self.content_frame
+        existing = get_item(item_id) if item_id else None
+
+        self._lbl(cf, "Edit Item" if existing else "Add Item",
+                  font=("Arial", 15, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 4))
+
+        form = tk.Frame(cf, bg=BG)
+        form.pack(anchor="w")
+
+        name_e = self._field(form, "Item Name",
+                             default=existing[1] if existing else "")
+        qty_e  = self._field(form, "Quantity",
+                             default=str(existing[2]) if existing else "")
+        exp_e  = self._field(form, "Expiration Date  (YYYY-MM-DD, optional)",
+                             default=(existing[3] or "") if existing else "")
+
+        def save():
+            name = name_e.get().strip()
+            exp  = exp_e.get().strip() or None
+            if not name:
+                messagebox.showerror("Error", "Item name is required.")
+                return
+            try:
+                qty = int(qty_e.get())
+            except ValueError:
+                messagebox.showerror("Error", "Quantity must be a whole number.")
+                return
+            if item_id:
+                edit_item(item_id, name, qty, exp)
+            else:
+                add_item(name, qty, exp)
+            self._set_active("inv")
+            self.show_inventory_content()
+
+        btn_row = tk.Frame(cf, bg=BG)
+        btn_row.pack(anchor="w", pady=18)
+        tk.Button(btn_row, text="Save", command=save,
+                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
+                  relief="flat", padx=16, pady=5, cursor="hand2").pack(side="left", padx=(0, 8))
+        tk.Button(btn_row, text="Cancel", command=self.show_inventory_content,
+                  bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
+                  relief="flat", padx=16, pady=5, cursor="hand2").pack(side="left")
+
+    # ── PROFILE ────────────────────────────────────────────────────────────
+
+    def show_profile_content(self):
+        self._clear_content()
+        cf = self.content_frame
+
+        row = get_health_notes(self.current_user_id)
+        if not row:
+            return
+        username, role, health_notes = row
+
+        layout = tk.Frame(cf, bg=BG)
+        layout.pack(fill="both", expand=True)
+        layout.grid_columnconfigure(0, weight=1)
+        layout.grid_columnconfigure(1, weight=2)
+        layout.grid_rowconfigure(0, weight=1)
+
+        # ── Left: profile card ──────────────────────────────────────────
+        prof_f = tk.Frame(layout, bg=CARD)
+        prof_f.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        self._lbl(prof_f, "◉", font=("Arial", 42), fg=DIM, bg=CARD).pack(pady=(24, 4))
+        self._lbl(prof_f, username,
+                  font=("Arial", 14, "bold"), fg=TEXT, bg=CARD).pack()
+        role_color = ACCENT if role == "admin" else GREEN
+        self._lbl(prof_f, role.upper(),
+                  font=("Arial", 10, "bold"), fg=role_color, bg=CARD).pack(pady=(2, 18))
+
+        tk.Frame(prof_f, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(0, 14))
+
+        self._lbl(prof_f, "Health Notes",
+                  font=("Arial", 10), fg=DIM, bg=CARD).pack(anchor="w", padx=16)
+        notes_box = tk.Text(prof_f, bg=INPUT, fg=TEXT, insertbackground=TEXT,
+                            relief="flat", font=("Arial", 10), bd=6,
+                            width=24, height=7, wrap="word")
+        notes_box.pack(padx=16, pady=(4, 8), fill="x")
+        if health_notes:
+            notes_box.insert("1.0", health_notes)
+
+        def save_notes():
+            update_health_notes(self.current_user_id, notes_box.get("1.0", "end-1c").strip())
+            messagebox.showinfo("Saved", "Health notes updated.")
+
+        tk.Button(prof_f, text="Save Notes", command=save_notes,
+                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
+                  relief="flat", padx=12, pady=4, cursor="hand2").pack(padx=16, anchor="w")
+
+        tk.Frame(prof_f, bg=BORDER, height=1).pack(fill="x", padx=16, pady=16)
+
+        tk.Button(prof_f, text="  Scan Medication Barcode",
+                  command=lambda: [self._set_active("pro"),
+                                   self.show_barcode_scanner_content()],
+                  bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
+                  relief="flat", padx=12, pady=6, cursor="hand2").pack(padx=16, fill="x")
+
+        # ── Right: activity ─────────────────────────────────────────────
+        act_f = tk.Frame(layout, bg=BG)
+        act_f.grid(row=0, column=1, sticky="nsew")
+
+        self._lbl(act_f, "Checkout History",
+                  font=("Arial", 13, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 8))
+
+        tbl_f = tk.Frame(act_f, bg=CARD)
+        tbl_f.pack(fill="both", expand=True)
+
+        cols = ("Date", "Item", "Amount")
+        tree = ttk.Treeview(tbl_f, columns=cols, show="headings",
+                            style="Dark.Treeview", selectmode="none")
+        for col, w, anchor in [("Date", 120, "center"), ("Item", 280, "w"), ("Amount", 80, "center")]:
+            tree.heading(col, text=col)
+            tree.column(col, width=w, anchor=anchor)
+
+        history = get_user_checkout_history(self.current_user_id, limit=20)
+        if not history:
+            tree.insert("", "end", values=("—", "No checkouts yet", "—"))
+        else:
+            for item_name, amount, timestamp in history:
+                tree.insert("", "end", values=(
+                    timestamp[:10] if timestamp else "—",
+                    item_name,
+                    amount,
+                ))
+
+        vsb = ttk.Scrollbar(tbl_f, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        tree.pack(fill="both", expand=True)
+
+    # ── BARCODE SCANNER ────────────────────────────────────────────────────
+
+    def show_barcode_scanner_content(self):
+        self._clear_content()
+        cf = self.content_frame
+        from barcode import scan_barcode
+
+        self._lbl(cf, "Medication Barcode Scanner",
+                  font=("Arial", 14, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 12))
+
+        layout = tk.Frame(cf, bg=BG)
+        layout.pack(fill="both", expand=True)
+        layout.grid_columnconfigure(0, weight=1)
+        layout.grid_columnconfigure(1, weight=2)
+        layout.grid_rowconfigure(0, weight=1)
+
+        # ── Left: scan trigger ──────────────────────────────────────────
+        scan_f = tk.Frame(layout, bg=CARD)
+        scan_f.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        self._lbl(scan_f, "How to scan",
+                  font=("Arial", 11, "bold"), fg=TEXT, bg=CARD).pack(anchor="w", padx=16, pady=(16, 8))
+        for step in [
+            "1. Click Open Scanner below",
+            "2. Hold barcode up to camera",
+            "3. Keep steady — green box = detected",
+            "4. Window closes automatically",
+            "   Press Q to cancel",
+        ]:
+            self._lbl(scan_f, step, font=("Arial", 10), fg=DIM,
+                      bg=CARD).pack(anchor="w", padx=20, pady=1)
+
+        tk.Frame(scan_f, bg=BORDER, height=1).pack(fill="x", padx=16, pady=16)
+
+        def do_scan():
+            messagebox.showinfo("Scanner Opening",
+                                "Camera window will open.\n"
+                                "Hold your barcode up to the camera.\n"
+                                "Press Q to cancel.")
+            barcode = scan_barcode()
+            if barcode:
+                _show_result(barcode)
+            else:
+                _show_result(None)
+
+        tk.Button(scan_f, text="Open Scanner", command=do_scan,
+                  bg=ACCENT, fg="white", font=("Arial", 12, "bold"),
+                  relief="flat", padx=20, pady=10, cursor="hand2").pack(padx=16, fill="x")
+
+        # ── Right: result panel ─────────────────────────────────────────
+        res_f = tk.Frame(layout, bg=CARD)
+        res_f.grid(row=0, column=1, sticky="nsew")
+        self._lbl(res_f, "Scan Result",
+                  font=("Arial", 11, "bold"), fg=TEXT, bg=CARD).pack(anchor="w", padx=14, pady=(12, 8))
+
+        res_body = tk.Frame(res_f, bg=CARD)
+        res_body.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        self._lbl(res_body, "Click 'Open Scanner' to begin.",
+                  fg=DIM, bg=CARD, font=("Arial", 10)).pack(anchor="w")
+
+        def _clear_result():
+            for w in res_body.winfo_children():
+                w.destroy()
+
+        def _show_result(barcode_str):
+            _clear_result()
+
+            if barcode_str is None:
+                self._lbl(res_body, "No barcode detected.",
+                          fg=DIM, bg=CARD, font=("Arial", 10)).pack(anchor="w")
+                return
+
+            item = get_item_by_barcode(barcode_str)
+
+            if item:
+                item_id, name, qty, exp, checked_out, _ = item
+                qty_fg = RED if qty == 0 else (YELLOW if qty <= 5 else GREEN)
+
+                self._lbl(res_body, "✓  Found in Inventory",
+                          fg=GREEN, bg=CARD, font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 8))
+                self._lbl(res_body, name,
+                          font=("Arial", 13, "bold"), fg=TEXT, bg=CARD).pack(anchor="w")
+
+                for label, value, vc in [
+                    ("Barcode",         barcode_str,      DIM),
+                    ("In Stock",        str(qty),         qty_fg),
+                    ("Expires",         exp or "—",       TEXT),
+                    ("Total Checkouts", str(checked_out), TEXT),
+                ]:
+                    self._lbl(res_body, label,
+                              font=("Arial", 9), fg=DIM, bg=CARD).pack(anchor="w", pady=(6, 0))
+                    self._lbl(res_body, value,
+                              font=("Arial", 11, "bold"), fg=vc, bg=CARD).pack(anchor="w")
+
+                btn_row = tk.Frame(res_body, bg=CARD)
+                btn_row.pack(anchor="w", pady=(14, 0))
+
+                if qty > 0:
+                    def do_checkout(iid=item_id, q=qty):
+                        amt = simpledialog.askinteger(
+                            "Checkout", f"Amount (available: {q}):",
+                            minvalue=1, parent=self.root)
+                        if not amt:
+                            return
+                        ok, msg = checkout_item(iid, self.current_user_id, amt)
+                        (messagebox.showinfo if ok else messagebox.showerror)("Checkout", msg)
+                        if ok:
+                            _show_result(barcode_str)
+
+                    tk.Button(btn_row, text="Checkout", command=do_checkout,
+                              bg=GREEN, fg="white", font=("Arial", 10, "bold"),
+                              relief="flat", padx=12, pady=5,
+                              cursor="hand2").pack(side="left", padx=(0, 6))
+
+                tk.Button(btn_row, text="Scan Again", command=do_scan,
+                          bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
+                          relief="flat", padx=12, pady=5,
+                          cursor="hand2").pack(side="left")
+
+            else:
+                self._lbl(res_body, "Not in Inventory",
+                          fg=YELLOW, bg=CARD,
+                          font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 6))
+                self._lbl(res_body, f"Barcode: {barcode_str}",
+                          fg=DIM, bg=CARD,
+                          font=("Arial", 9)).pack(anchor="w", pady=(0, 10))
+                self._lbl(res_body, "Add to inventory:",
+                          fg=TEXT, bg=CARD,
+                          font=("Arial", 10)).pack(anchor="w", pady=(0, 4))
+
+                name_e = self._placeholder_entry(res_body, "Item Name",  width=24)
+                name_e.pack(anchor="w", pady=2)
+                qty_e  = self._placeholder_entry(res_body, "Quantity",   width=24)
+                qty_e.pack(anchor="w", pady=2)
+                exp_e  = self._placeholder_entry(res_body, "Expiry MM/DD/YYYY", width=24)
+                exp_e.pack(anchor="w", pady=2)
+
+                def add_new():
+                    name  = name_e.get().strip()
+                    qty_s = qty_e.get().strip()
+                    exp_s = exp_e.get().strip()
+                    if name in ("", "Item Name") or qty_s in ("", "Quantity"):
+                        messagebox.showerror("Error", "Name and quantity are required.")
+                        return
+                    try:
+                        qty = int(qty_s)
+                    except ValueError:
+                        messagebox.showerror("Error", "Quantity must be a number.")
+                        return
+                    exp_date = None
+                    if exp_s and exp_s != "Expiry MM/DD/YYYY":
+                        for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+                            try:
+                                exp_date = datetime.datetime.strptime(
+                                    exp_s, fmt).strftime("%Y-%m-%d")
+                                break
+                            except ValueError:
+                                continue
+                    iid = add_item(name, qty, exp_date)
+                    set_item_barcode(iid, barcode_str)
+                    messagebox.showinfo("Added", f"'{name}' added to inventory.")
+                    _show_result(barcode_str)
+
+                tk.Button(res_body, text="Add to Inventory", command=add_new,
+                          bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
+                          relief="flat", padx=12, pady=5,
+                          cursor="hand2").pack(anchor="w", pady=(10, 0))
+
+    # ── CALENDAR ───────────────────────────────────────────────────────────
+
+    def show_calendar_content(self):
+        self._clear_content()
+        cf = self.content_frame
+
+        try:
+            from tkcalendar import Calendar as TkCal
+        except ImportError:
+            self._lbl(cf, "tkcalendar not available.", fg=RED, bg=BG).pack()
+            return
+
         today = datetime.date.today()
-        year = today.year
-        month = today.month
+        left  = tk.Frame(cf, bg=BG)
+        left.pack(side="left", fill="y", padx=(0, 16))
 
-        cal = calendar.monthcalendar(year, month)
+        cal = TkCal(left, selectmode="day",
+                    year=today.year, month=today.month, day=today.day,
+                    background=CARD, foreground=TEXT,
+                    selectbackground=ACCENT, selectforeground="white",
+                    headersbackground=NAV, headersforeground=TEXT,
+                    normalbackground=CARD, normalforeground=TEXT,
+                    weekendbackground=CARD, weekendforeground=DIM,
+                    othermonthbackground=BG, othermonthforeground=BORDER,
+                    font=("Arial", 11), borderwidth=0, showweeknumbers=False)
+        cal.pack()
 
-        cal_frame = tk.Frame(self.root)
-        cal_frame.pack(pady=20)
+        # Right panel: events
+        right = tk.Frame(cf, bg=BG)
+        right.pack(side="left", fill="both", expand=True)
 
-        # Weekday headers
-        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        for i, day in enumerate(days):
-            tk.Label(
-                cal_frame,
-                text=day,
-                font=("Arial", 12, "bold"),
-                borderwidth=1,
-                relief="solid",
-                width=10,
-                height=2
-            ).grid(row=0, column=i)
+        self._lbl(right, "Mission Events",
+                  font=("Arial", 14, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 8))
 
-        # Calendar days
-        for row_idx, week in enumerate(cal, start=1):
-            for col_idx, day in enumerate(week):
-                text = "" if day == 0 else str(day)
-                tk.Label(
-                    cal_frame,
-                    text=text,
-                    font=("Arial", 12),
-                    borderwidth=1,
-                    relief="solid",
-                    width=10,
-                    height=4
-                ).grid(row=row_idx, column=col_idx)
+        # Event list
+        list_f = tk.Frame(right, bg=CARD)
+        list_f.pack(fill="both", expand=True)
 
+        ev_tree = ttk.Treeview(list_f, columns=("Date", "Title"), show="headings",
+                               style="Dark.Treeview", selectmode="browse", height=10)
+        ev_tree.heading("Date",  text="Date")
+        ev_tree.heading("Title", text="Title")
+        ev_tree.column("Date",  width=110, anchor="center")
+        ev_tree.column("Title", width=260, anchor="w")
+        ev_tree.pack(fill="both", expand=True, padx=4, pady=4)
 
-    # this one makes the window dissapear when they pick exit
+        def refresh_events():
+            for row in ev_tree.get_children():
+                ev_tree.delete(row)
+            for eid, title, edate, _ in get_calendar_events():
+                ev_tree.insert("", "end", iid=str(eid), values=(edate, title))
 
-    def clear_window(self):
-        for widget in self.root.winfo_children():
-            widget.destroy()
+        refresh_events()
 
+        # Add / delete controls
+        ctrl = tk.Frame(right, bg=BG)
+        ctrl.pack(fill="x", pady=(8, 0))
 
+        title_var = tk.StringVar()
+        tk.Entry(ctrl, textvariable=title_var, bg=INPUT, fg=TEXT,
+                 insertbackground=TEXT, relief="flat", bd=5,
+                 font=("Arial", 10), width=26).pack(side="left", padx=(0, 6))
 
-# gotta make sure it runs
+        def add_event():
+            title = title_var.get().strip()
+            if not title:
+                messagebox.showwarning("Missing Title", "Enter an event title.")
+                return
+            selected_date = cal.get_date()
+            # tkcalendar returns MM/DD/YY by default; normalise to YYYY-MM-DD
+            try:
+                dt = datetime.datetime.strptime(selected_date, "%m/%d/%y")
+                date_str = dt.strftime("%Y-%m-%d")
+            except ValueError:
+                date_str = selected_date
+            add_calendar_event(title, date_str)
+            title_var.set("")
+            refresh_events()
+
+        def delete_event():
+            sel = ev_tree.selection()
+            if not sel:
+                return
+            delete_calendar_event(int(sel[0]))
+            refresh_events()
+
+        tk.Button(ctrl, text="Add Event", command=add_event,
+                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
+                  relief="flat", padx=10, pady=4, cursor="hand2").pack(side="left", padx=(0, 6))
+        tk.Button(ctrl, text="Delete", command=delete_event,
+                  bg=RED, fg="white", font=("Arial", 10, "bold"),
+                  relief="flat", padx=10, pady=4, cursor="hand2").pack(side="left")
+
 
 if __name__ == "__main__":
+    init_db()
     root = tk.Tk()
-    app = App(root)
+    app  = App(root)
     root.mainloop()
-    

@@ -2,8 +2,10 @@ from login import login, create_user
 from faces import recognize_user
 from conflict import log_conflict
 from medication import dispense_medication
+from database import init_db
 
 def main():
+    init_db()
     while True:
         print("\n=== MAIN MENU ===")
         print("1. Login")

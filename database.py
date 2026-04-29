@@ -62,6 +62,49 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS inventory (
+        item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 0,
+        expiration_date TEXT,
+        checked_out INTEGER DEFAULT 0,
+        last_checked_out TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS checkout_log (
+        log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id INTEGER,
+        user_id INTEGER,
+        amount INTEGER,
+        timestamp TEXT,
+        FOREIGN KEY(item_id) REFERENCES inventory(item_id),
+        FOREIGN KEY(user_id) REFERENCES users(user_id)
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS calendar_events (
+        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        event_date TEXT NOT NULL,
+        end_date TEXT
+    )
+    """)
+
+    # Migrate existing tables with new columns (safe on repeated runs)
+    migrations = [
+        "ALTER TABLE inventory ADD COLUMN barcode TEXT",
+        "ALTER TABLE users ADD COLUMN health_notes TEXT",
+    ]
+    for sql in migrations:
+        try:
+            cursor.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
     conn.commit()
     conn.close()
 

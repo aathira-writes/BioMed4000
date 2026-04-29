@@ -8,7 +8,7 @@ matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from login import login, create_user
+from login import login, create_user, verify_admin, admin_exists
 from training import capture_faces
 from faces import recognize_user
 from identity import verify_identity
@@ -19,8 +19,10 @@ from inventory import (
     add_item, get_all_items, get_item, edit_item, delete_item,
     checkout_item, get_dashboard_stats, get_weekly_usage,
     get_alerts, get_risk_level, get_depletion_forecast, get_item_forecast,
-    get_item_by_barcode, set_item_barcode,
-    get_user_checkout_history, get_health_notes, update_health_notes,
+    get_item_by_barcode,
+    get_all_users, get_user_checkout_history, get_health_notes, update_health_notes,
+    add_personal_medication, get_personal_medications,
+    get_personal_medication_by_barcode, delete_personal_medication,
     get_calendar_events, add_calendar_event, delete_calendar_event,
 )
 
@@ -54,6 +56,83 @@ class App:
         self.content_frame = None
         self._configure_styles()
         self.show_main_menu()
+
+    # ── admin verification dialog ──────────────────────────────────────────
+
+    def _request_admin_auth(self):
+        """
+        Shows a modal dialog asking for an existing admin's credentials.
+        Returns True if verified, False if cancelled or wrong credentials.
+        Skips the check automatically when no admins exist yet.
+        """
+        if not admin_exists():
+            return True   # first admin can be created freely
+
+        result = {"ok": False}
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Admin Authorisation Required")
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        # Centre over parent
+        self.root.update_idletasks()
+        px, py = self.root.winfo_rootx(), self.root.winfo_rooty()
+        pw, ph = self.root.winfo_width(), self.root.winfo_height()
+        dlg.geometry(f"380x310+{px + pw//2 - 190}+{py + ph//2 - 155}")
+
+        self._lbl(dlg, "Admin Authorisation Required",
+                  font=("Arial", 13, "bold"), fg=TEXT, bg=BG).pack(pady=(22, 4))
+        self._lbl(dlg,
+                  "Creating an admin or medic account requires\n"
+                  "an existing admin to enter their credentials.",
+                  font=("Arial", 10), fg=DIM, bg=BG,
+                  justify="center").pack(pady=(0, 18))
+
+        form = tk.Frame(dlg, bg=BG)
+        form.pack()
+
+        self._lbl(form, "Admin Username", fg=DIM, bg=BG,
+                  font=("Arial", 10)).pack(anchor="w")
+        admin_user_e = tk.Entry(form, bg=INPUT, fg=TEXT, insertbackground=TEXT,
+                                relief="flat", font=("Arial", 11), bd=6, width=30)
+        admin_user_e.pack(pady=(2, 10))
+
+        self._lbl(form, "Admin Password", fg=DIM, bg=BG,
+                  font=("Arial", 10)).pack(anchor="w")
+        admin_pass_e = tk.Entry(form, bg=INPUT, fg=TEXT, insertbackground=TEXT,
+                                relief="flat", font=("Arial", 11), bd=6, width=30,
+                                show="*")
+        admin_pass_e.pack(pady=(2, 0))
+
+        err_lbl = self._lbl(dlg, "", fg=RED, bg=BG, font=("Arial", 9))
+        err_lbl.pack(pady=(6, 0))
+
+        def _verify():
+            if verify_admin(admin_user_e.get().strip(), admin_pass_e.get()):
+                result["ok"] = True
+                dlg.destroy()
+            else:
+                err_lbl.config(text="Incorrect credentials or not an admin account.")
+                admin_pass_e.delete(0, "end")
+
+        btn_row = tk.Frame(dlg, bg=BG)
+        btn_row.pack(pady=(10, 0))
+        tk.Button(btn_row, text="Authorise", command=_verify,
+                  bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
+                  relief="flat", padx=16, pady=5,
+                  cursor="hand2").pack(side="left", padx=(0, 8))
+        tk.Button(btn_row, text="Cancel", command=dlg.destroy,
+                  bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
+                  relief="flat", padx=16, pady=5,
+                  cursor="hand2").pack(side="left")
+
+        admin_pass_e.bind("<Return>", lambda *_: _verify())
+        admin_user_e.focus_set()
+        dlg.wait_window()
+        return result["ok"]
 
     # ── ttk theming ────────────────────────────────────────────────────────
 
@@ -210,7 +289,7 @@ class App:
         role_var = tk.StringVar(value="crew")
         role_row = tk.Frame(frame, bg=BG)
         role_row.pack(anchor="w")
-        for val, label in [("crew", "Crew"), ("admin", "Admin")]:
+        for val, label in [("crew", "Crew"), ("medic", "Medic"), ("admin", "Admin")]:
             tk.Radiobutton(role_row, text=label, variable=role_var, value=val,
                            bg=BG, fg=TEXT, selectcolor=INPUT,
                            activebackground=BG, font=("Arial", 10)).pack(side="left", padx=(0, 14))
@@ -218,10 +297,14 @@ class App:
         def save_user():
             username = user_e.get().strip()
             password = pass_e.get()
+            role     = role_var.get()
             if not username or not password:
                 messagebox.showerror("Error", "All fields are required.")
                 return
-            user_id = create_user(username, password, role_var.get())
+            if role in ("admin", "medic"):
+                if not self._request_admin_auth():
+                    return   # cancelled or failed — do nothing
+            user_id = create_user(username, password, role)
             if user_id is None:
                 messagebox.showerror("Error", "Username already exists.")
                 return
@@ -266,11 +349,13 @@ class App:
         nav.pack(fill="x")
         nav.pack_propagate(False)
         items = [
-            ("Dashboard", "dash", self.show_dashboard_content),
-            ("Inventory",  "inv",  self.show_inventory_content),
-            ("Calendar",   "cal",  self.show_calendar_content),
-            ("Profile",    "pro",  self.show_profile_content),
+            ("Dashboard",    "dash", self.show_dashboard_content),
+            ("Inventory",    "inv",  self.show_inventory_content),
+            ("Calendar",     "cal",  self.show_calendar_content),
+            ("Profile",      "pro",  self.show_profile_content),
         ]
+        if self.current_user_role in ("medic", "admin"):
+            items.append(("Medical Docs", "med", self.show_medical_docs_content))
         for label, key, cmd in items:
             b = tk.Button(nav, text=label,
                           command=lambda k=key, c=cmd: [self._set_active(k), c()],
@@ -905,35 +990,137 @@ class App:
         # ── Right: activity ─────────────────────────────────────────────
         act_f = tk.Frame(layout, bg=BG)
         act_f.grid(row=0, column=1, sticky="nsew")
+        act_f.grid_rowconfigure(0, weight=1)
+        act_f.grid_rowconfigure(1, weight=1)
+        act_f.grid_columnconfigure(0, weight=1)
 
-        self._lbl(act_f, "Checkout History",
-                  font=("Arial", 13, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 8))
+        # ── Checkout history ────────────────────────────────────────────
+        hist_f = tk.Frame(act_f, bg=BG)
+        hist_f.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
 
-        tbl_f = tk.Frame(act_f, bg=CARD)
+        self._lbl(hist_f, "My Medications",
+                  font=("Arial", 12, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 6))
+
+        tbl_f = tk.Frame(hist_f, bg=CARD)
         tbl_f.pack(fill="both", expand=True)
 
-        cols = ("Date", "Item", "Amount")
+        cols = ("Date", "Medication", "Qty")
         tree = ttk.Treeview(tbl_f, columns=cols, show="headings",
-                            style="Dark.Treeview", selectmode="none")
-        for col, w, anchor in [("Date", 120, "center"), ("Item", 280, "w"), ("Amount", 80, "center")]:
+                            style="Dark.Treeview", selectmode="none", height=6)
+        for col, w, anchor in [("Date", 110, "center"), ("Medication", 240, "w"), ("Qty", 70, "center")]:
             tree.heading(col, text=col)
             tree.column(col, width=w, anchor=anchor)
 
         history = get_user_checkout_history(self.current_user_id, limit=20)
         if not history:
-            tree.insert("", "end", values=("—", "No checkouts yet", "—"))
+            tree.insert("", "end", values=("—", "No medications checked out yet", "—"))
         else:
             for item_name, amount, timestamp in history:
                 tree.insert("", "end", values=(
                     timestamp[:10] if timestamp else "—",
-                    item_name,
-                    amount,
+                    item_name, amount,
                 ))
 
         vsb = ttk.Scrollbar(tbl_f, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         tree.pack(fill="both", expand=True)
+
+        # ── Personal medications ────────────────────────────────────────
+        pm_f = tk.Frame(act_f, bg=BG)
+        pm_f.grid(row=1, column=0, sticky="nsew")
+
+        hdr_row = tk.Frame(pm_f, bg=BG)
+        hdr_row.pack(fill="x", pady=(0, 6))
+        self._lbl(hdr_row, "Personal Medications",
+                  font=("Arial", 12, "bold"), fg=TEXT, bg=BG).pack(side="left")
+        tk.Button(hdr_row, text="Scan Barcode",
+                  command=lambda: [self._set_active("pro"),
+                                   self.show_barcode_scanner_content()],
+                  bg=INPUT, fg=DIM, font=("Arial", 9, "bold"),
+                  relief="flat", padx=8, pady=2,
+                  cursor="hand2").pack(side="right", padx=(4, 0))
+
+        # ── Inline add form ─────────────────────────────────────────────
+        add_bar = tk.Frame(pm_f, bg=CARD, padx=10, pady=8)
+        add_bar.pack(fill="x", pady=(0, 6))
+
+        name_e   = self._placeholder_entry(add_bar, "Medication name", width=20)
+        name_e.pack(side="left", padx=(0, 4))
+        dosage_e = self._placeholder_entry(add_bar, "Dosage",          width=14)
+        dosage_e.pack(side="left", padx=(0, 4))
+        notes_e  = self._placeholder_entry(add_bar, "Notes (optional)", width=18)
+        notes_e.pack(side="left", padx=(0, 8))
+
+        pm_tbl_f = tk.Frame(pm_f, bg=CARD)
+        pm_tbl_f.pack(fill="both", expand=True)
+
+        pm_cols = ("Name", "Dosage", "Notes", "Added", "")
+        pm_tree = ttk.Treeview(pm_tbl_f, columns=pm_cols, show="headings",
+                               style="Dark.Treeview", selectmode="browse", height=5)
+        for col, w, anchor in [
+            ("Name",   180, "w"), ("Dosage", 110, "w"),
+            ("Notes",  160, "w"), ("Added",   95, "center"), ("", 60, "center"),
+        ]:
+            pm_tree.heading(col, text=col)
+            pm_tree.column(col, width=w, anchor=anchor)
+
+        def _load_pm():
+            for row in pm_tree.get_children():
+                pm_tree.delete(row)
+            meds = get_personal_medications(self.current_user_id)
+            if not meds:
+                pm_tree.insert("", "end",
+                               values=("No personal medications saved", "", "", "", ""))
+            else:
+                for pm_id, name, dosage, notes, _, added in meds:
+                    pm_tree.insert("", "end", iid=str(pm_id), values=(
+                        name, dosage or "—", notes or "—",
+                        added[:10] if added else "—", "✕ Remove",
+                    ))
+
+        def _add_manual():
+            name   = name_e.get().strip()
+            dosage = dosage_e.get().strip()
+            notes  = notes_e.get().strip()
+            if name in ("", "Medication name"):
+                messagebox.showerror("Error", "Medication name is required.")
+                return
+            add_personal_medication(
+                self.current_user_id, name,
+                dosage=dosage if dosage != "Dosage"           else None,
+                notes=notes   if notes  != "Notes (optional)" else None,
+            )
+            # clear fields
+            for e, ph in [(name_e, "Medication name"), (dosage_e, "Dosage"),
+                          (notes_e, "Notes (optional)")]:
+                e.delete(0, "end")
+                e.insert(0, ph)
+                e.config(fg=DIM)
+            _load_pm()
+
+        tk.Button(add_bar, text="Add", command=_add_manual,
+                  bg=GREEN, fg="white", font=("Arial", 9, "bold"),
+                  relief="flat", padx=10, pady=4,
+                  cursor="hand2").pack(side="left")
+
+        def _on_pm_click(event):
+            item = pm_tree.identify_row(event.y)
+            col  = pm_tree.identify_column(event.x)
+            if item and col == "#5":
+                try:
+                    delete_personal_medication(int(item))
+                    _load_pm()
+                except ValueError:
+                    pass
+
+        pm_tree.bind("<ButtonRelease-1>", _on_pm_click)
+
+        pm_vsb = ttk.Scrollbar(pm_tbl_f, orient="vertical", command=pm_tree.yview)
+        pm_tree.configure(yscrollcommand=pm_vsb.set)
+        pm_vsb.pack(side="right", fill="y")
+        pm_tree.pack(fill="both", expand=True)
+        _load_pm()
 
     # ── BARCODE SCANNER ────────────────────────────────────────────────────
 
@@ -970,11 +1157,11 @@ class App:
         tk.Frame(scan_f, bg=BORDER, height=1).pack(fill="x", padx=16, pady=16)
 
         def do_scan():
-            messagebox.showinfo("Scanner Opening",
-                                "Camera window will open.\n"
-                                "Hold your barcode up to the camera.\n"
-                                "Press Q to cancel.")
+            self.root.iconify()          # hide main window so scanner is visible
             barcode = scan_barcode()
+            self.root.deiconify()        # restore main window
+            self.root.lift()
+            self.root.focus_force()
             if barcode:
                 _show_result(barcode)
             else:
@@ -1010,13 +1197,17 @@ class App:
             item = get_item_by_barcode(barcode_str)
 
             if item:
+                # ── Ship supply item ────────────────────────────────────
                 item_id, name, qty, exp, checked_out, _ = item
                 qty_fg = RED if qty == 0 else (YELLOW if qty <= 5 else GREEN)
 
-                self._lbl(res_body, "✓  Found in Inventory",
-                          fg=GREEN, bg=CARD, font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 8))
+                tk.Frame(res_body, bg=ACCENT, height=3).pack(fill="x", pady=(0, 10))
+                self._lbl(res_body, "SHIP SUPPLY",
+                          fg=ACCENT, bg=CARD,
+                          font=("Arial", 9, "bold")).pack(anchor="w")
                 self._lbl(res_body, name,
-                          font=("Arial", 13, "bold"), fg=TEXT, bg=CARD).pack(anchor="w")
+                          font=("Arial", 13, "bold"), fg=TEXT,
+                          bg=CARD).pack(anchor="w", pady=(2, 0))
 
                 for label, value, vc in [
                     ("Barcode",         barcode_str,      DIM),
@@ -1031,7 +1222,6 @@ class App:
 
                 btn_row = tk.Frame(res_body, bg=CARD)
                 btn_row.pack(anchor="w", pady=(14, 0))
-
                 if qty > 0:
                     def do_checkout(iid=item_id, q=qty):
                         amt = simpledialog.askinteger(
@@ -1043,65 +1233,250 @@ class App:
                         (messagebox.showinfo if ok else messagebox.showerror)("Checkout", msg)
                         if ok:
                             _show_result(barcode_str)
-
                     tk.Button(btn_row, text="Checkout", command=do_checkout,
                               bg=GREEN, fg="white", font=("Arial", 10, "bold"),
                               relief="flat", padx=12, pady=5,
                               cursor="hand2").pack(side="left", padx=(0, 6))
-
                 tk.Button(btn_row, text="Scan Again", command=do_scan,
                           bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
                           relief="flat", padx=12, pady=5,
                           cursor="hand2").pack(side="left")
 
             else:
-                self._lbl(res_body, "Not in Inventory",
-                          fg=YELLOW, bg=CARD,
-                          font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 6))
-                self._lbl(res_body, f"Barcode: {barcode_str}",
-                          fg=DIM, bg=CARD,
-                          font=("Arial", 9)).pack(anchor="w", pady=(0, 10))
-                self._lbl(res_body, "Add to inventory:",
-                          fg=TEXT, bg=CARD,
-                          font=("Arial", 10)).pack(anchor="w", pady=(0, 4))
+                # ── Personal medication (not in ship supply at all) ─────
+                personal = get_personal_medication_by_barcode(
+                    self.current_user_id, barcode_str)
 
-                name_e = self._placeholder_entry(res_body, "Item Name",  width=24)
-                name_e.pack(anchor="w", pady=2)
-                qty_e  = self._placeholder_entry(res_body, "Quantity",   width=24)
-                qty_e.pack(anchor="w", pady=2)
-                exp_e  = self._placeholder_entry(res_body, "Expiry MM/DD/YYYY", width=24)
-                exp_e.pack(anchor="w", pady=2)
+                if personal:
+                    # Already saved — just show it
+                    _, pm_name, pm_dosage, pm_notes = personal
+                    tk.Frame(res_body, bg=GREEN, height=3).pack(fill="x", pady=(0, 10))
+                    self._lbl(res_body, "MY PERSONAL MEDICATION",
+                              fg=GREEN, bg=CARD,
+                              font=("Arial", 9, "bold")).pack(anchor="w")
+                    self._lbl(res_body, pm_name,
+                              font=("Arial", 13, "bold"), fg=TEXT,
+                              bg=CARD).pack(anchor="w", pady=(2, 0))
+                    for label, value in [
+                        ("Dosage", pm_dosage or "—"),
+                        ("Notes",  pm_notes  or "—"),
+                    ]:
+                        self._lbl(res_body, label,
+                                  font=("Arial", 9), fg=DIM,
+                                  bg=CARD).pack(anchor="w", pady=(6, 0))
+                        self._lbl(res_body, value,
+                                  font=("Arial", 11, "bold"), fg=TEXT,
+                                  bg=CARD).pack(anchor="w")
+                    self._lbl(res_body,
+                              "Visible only on your Profile page.",
+                              fg=DIM, bg=CARD,
+                              font=("Arial", 9, "italic")).pack(anchor="w", pady=(10, 0))
+                    tk.Button(res_body, text="Scan Again", command=do_scan,
+                              bg=INPUT, fg=TEXT, font=("Arial", 10, "bold"),
+                              relief="flat", padx=12, pady=5,
+                              cursor="hand2").pack(anchor="w", pady=(10, 0))
 
-                def add_new():
-                    name  = name_e.get().strip()
-                    qty_s = qty_e.get().strip()
-                    exp_s = exp_e.get().strip()
-                    if name in ("", "Item Name") or qty_s in ("", "Quantity"):
-                        messagebox.showerror("Error", "Name and quantity are required.")
-                        return
-                    try:
-                        qty = int(qty_s)
-                    except ValueError:
-                        messagebox.showerror("Error", "Quantity must be a number.")
-                        return
-                    exp_date = None
-                    if exp_s and exp_s != "Expiry MM/DD/YYYY":
-                        for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
-                            try:
-                                exp_date = datetime.datetime.strptime(
-                                    exp_s, fmt).strftime("%Y-%m-%d")
-                                break
-                            except ValueError:
-                                continue
-                    iid = add_item(name, qty, exp_date)
-                    set_item_barcode(iid, barcode_str)
-                    messagebox.showinfo("Added", f"'{name}' added to inventory.")
-                    _show_result(barcode_str)
+                else:
+                    # New barcode — save to personal medications only
+                    tk.Frame(res_body, bg=GREEN, height=3).pack(fill="x", pady=(0, 10))
+                    self._lbl(res_body, "MY PERSONAL MEDICATION",
+                              fg=GREEN, bg=CARD,
+                              font=("Arial", 9, "bold")).pack(anchor="w")
+                    self._lbl(res_body,
+                              "Not part of ship supply.\n"
+                              "Saved privately to your profile only.",
+                              fg=DIM, bg=CARD,
+                              font=("Arial", 9, "italic")).pack(anchor="w", pady=(2, 10))
 
-                tk.Button(res_body, text="Add to Inventory", command=add_new,
-                          bg=ACCENT, fg="white", font=("Arial", 10, "bold"),
-                          relief="flat", padx=12, pady=5,
-                          cursor="hand2").pack(anchor="w", pady=(10, 0))
+                    pm_name_e   = self._placeholder_entry(res_body, "Medication name", width=24)
+                    pm_name_e.pack(anchor="w", pady=2)
+                    pm_dosage_e = self._placeholder_entry(res_body, "Dosage (e.g. 200mg)", width=24)
+                    pm_dosage_e.pack(anchor="w", pady=2)
+                    pm_notes_e  = self._placeholder_entry(res_body, "Notes (optional)", width=24)
+                    pm_notes_e.pack(anchor="w", pady=2)
+
+                    def save_personal():
+                        name = pm_name_e.get().strip()
+                        if name in ("", "Medication name"):
+                            messagebox.showerror("Error", "Medication name is required.")
+                            return
+                        dosage = pm_dosage_e.get().strip()
+                        notes  = pm_notes_e.get().strip()
+                        add_personal_medication(
+                            self.current_user_id, name, barcode_str,
+                            dosage if dosage != "Dosage (e.g. 200mg)" else None,
+                            notes  if notes  != "Notes (optional)"    else None,
+                        )
+                        _show_result(barcode_str)
+
+                    tk.Button(res_body, text="Save to My Profile",
+                              command=save_personal,
+                              bg=GREEN, fg="white", font=("Arial", 10, "bold"),
+                              relief="flat", padx=12, pady=5,
+                              cursor="hand2").pack(anchor="w", pady=(8, 0))
+
+
+    # ── MEDICAL DOCS ───────────────────────────────────────────────────────
+
+    def show_medical_docs_content(self):
+        self._clear_content()
+        cf = self.content_frame
+
+        self._lbl(cf, "Medical Documentation",
+                  font=("Arial", 15, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 10))
+
+        users = get_all_users()
+
+        layout = tk.Frame(cf, bg=BG)
+        layout.pack(fill="both", expand=True)
+        layout.grid_columnconfigure(0, weight=1)
+        layout.grid_columnconfigure(1, weight=3)
+        layout.grid_rowconfigure(0, weight=1)
+
+        # ── Left: user list ─────────────────────────────────────────────
+        list_f = tk.Frame(layout, bg=CARD)
+        list_f.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        self._lbl(list_f, "Crew Members",
+                  font=("Arial", 10), fg=DIM, bg=CARD).pack(anchor="w", padx=12, pady=(10, 6))
+
+        role_colors = {"admin": ACCENT, "medic": YELLOW, "crew": GREEN}
+
+        detail_frame = tk.Frame(layout, bg=BG)
+        detail_frame.grid(row=0, column=1, sticky="nsew")
+
+        selected_btn = {"current": None}
+
+        def show_user(user_id, username, role, health_notes, btn):
+            # reset previous selection
+            if selected_btn["current"]:
+                selected_btn["current"].config(bg=CARD)
+            btn.config(bg=ACCENT)
+            selected_btn["current"] = btn
+
+            # clear detail panel
+            for w in detail_frame.winfo_children():
+                w.destroy()
+
+            # ── Detail header ────────────────────────────────────────
+            hdr = tk.Frame(detail_frame, bg=CARD)
+            hdr.pack(fill="x", pady=(0, 8))
+
+            self._lbl(hdr, "◉", font=("Arial", 28), fg=DIM,
+                      bg=CARD).pack(side="left", padx=(14, 8), pady=10)
+
+            info = tk.Frame(hdr, bg=CARD)
+            info.pack(side="left", pady=10)
+            self._lbl(info, username,
+                      font=("Arial", 13, "bold"), fg=TEXT, bg=CARD).pack(anchor="w")
+            rc = role_colors.get(role, DIM)
+            self._lbl(info, role.upper(),
+                      font=("Arial", 9, "bold"), fg=rc, bg=CARD).pack(anchor="w")
+
+            # ── Health notes ─────────────────────────────────────────
+            notes_card = tk.Frame(detail_frame, bg=CARD)
+            notes_card.pack(fill="x", pady=(0, 8))
+            self._lbl(notes_card, "Health Notes",
+                      font=("Arial", 10), fg=DIM, bg=CARD).pack(anchor="w", padx=12, pady=(10, 4))
+            notes_text = health_notes or "No health notes on file."
+            self._lbl(notes_card, notes_text,
+                      font=("Arial", 10), fg=TEXT, bg=CARD,
+                      wraplength=540, justify="left").pack(anchor="w", padx=12, pady=(0, 10))
+
+            # ── Bottom: personal meds + checkout history side by side
+            bottom = tk.Frame(detail_frame, bg=BG)
+            bottom.pack(fill="both", expand=True)
+            bottom.grid_columnconfigure(0, weight=1)
+            bottom.grid_columnconfigure(1, weight=1)
+            bottom.grid_rowconfigure(0, weight=1)
+
+            # Personal medications
+            pm_f = tk.Frame(bottom, bg=CARD)
+            pm_f.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+            self._lbl(pm_f, "Personal Medications",
+                      font=("Arial", 10), fg=DIM, bg=CARD).pack(anchor="w", padx=10, pady=(10, 4))
+
+            pm_tree = ttk.Treeview(pm_f,
+                                   columns=("Name", "Dosage", "Notes"),
+                                   show="headings", style="Dark.Treeview",
+                                   selectmode="none", height=8)
+            for col, w in [("Name", 140), ("Dosage", 100), ("Notes", 140)]:
+                pm_tree.heading(col, text=col)
+                pm_tree.column(col, width=w, anchor="w")
+
+            meds = get_personal_medications(user_id)
+            if not meds:
+                pm_tree.insert("", "end", values=("No personal medications", "", ""))
+            else:
+                for _, name, dosage, notes, _, _ in meds:
+                    pm_tree.insert("", "end",
+                                   values=(name, dosage or "—", notes or "—"))
+
+            pm_vsb = ttk.Scrollbar(pm_f, orient="vertical", command=pm_tree.yview)
+            pm_tree.configure(yscrollcommand=pm_vsb.set)
+            pm_vsb.pack(side="right", fill="y")
+            pm_tree.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 10))
+
+            # Checkout history
+            ch_f = tk.Frame(bottom, bg=CARD)
+            ch_f.grid(row=0, column=1, sticky="nsew")
+            self._lbl(ch_f, "Checkout History",
+                      font=("Arial", 10), fg=DIM, bg=CARD).pack(anchor="w", padx=10, pady=(10, 4))
+
+            ch_tree = ttk.Treeview(ch_f,
+                                   columns=("Date", "Item", "Qty"),
+                                   show="headings", style="Dark.Treeview",
+                                   selectmode="none", height=8)
+            for col, w, anchor in [("Date", 100, "center"), ("Item", 160, "w"), ("Qty", 50, "center")]:
+                ch_tree.heading(col, text=col)
+                ch_tree.column(col, width=w, anchor=anchor)
+
+            history = get_user_checkout_history(user_id, limit=30)
+            if not history:
+                ch_tree.insert("", "end", values=("—", "No checkouts yet", "—"))
+            else:
+                for item_name, amount, timestamp in history:
+                    ch_tree.insert("", "end", values=(
+                        timestamp[:10] if timestamp else "—",
+                        item_name, amount,
+                    ))
+
+            ch_vsb = ttk.Scrollbar(ch_f, orient="vertical", command=ch_tree.yview)
+            ch_tree.configure(yscrollcommand=ch_vsb.set)
+            ch_vsb.pack(side="right", fill="y")
+            ch_tree.pack(fill="both", expand=True, padx=(10, 0), pady=(0, 10))
+
+        # Build user buttons
+        for user_id, username, role, health_notes in users:
+            rc = role_colors.get(role, DIM)
+            row_f = tk.Frame(list_f, bg=CARD, cursor="hand2")
+            row_f.pack(fill="x", padx=6, pady=2)
+
+            btn = tk.Button(
+                row_f, anchor="w",
+                text=f"  {username}",
+                font=("Arial", 10, "bold"), fg=TEXT, bg=CARD,
+                relief="flat", bd=0, padx=8, pady=6, cursor="hand2",
+                activebackground=ACCENT, activeforeground="white",
+            )
+            btn.pack(side="left", fill="x", expand=True)
+            tk.Label(row_f, text=role.upper(),
+                     font=("Arial", 8), fg=rc, bg=CARD,
+                     padx=6).pack(side="right")
+
+            btn.config(command=lambda uid=user_id, un=username, r=role,
+                       hn=health_notes, b=btn: show_user(uid, un, r, hn, b))
+
+        if not users:
+            self._lbl(list_f, "No users registered.",
+                      fg=DIM, bg=CARD, font=("Arial", 10)).pack(padx=12, pady=12)
+        else:
+            # Auto-select first user
+            first = list_f.winfo_children()
+            if len(first) > 1:
+                first_btn = first[1].winfo_children()[0]
+                uid, un, r, hn = users[0]
+                show_user(uid, un, r, hn, first_btn)
 
     # ── CALENDAR ───────────────────────────────────────────────────────────
 

@@ -271,6 +271,65 @@ def get_user_checkout_history(user_id, limit=15):
     return rows
 
 
+def add_personal_medication(user_id, name, barcode=None, dosage=None, notes=None):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO personal_medications (user_id, name, barcode, dosage, notes, added_date) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, name, barcode, dosage, notes, datetime.now().isoformat())
+    )
+    conn.commit()
+    pm_id = cursor.lastrowid
+    conn.close()
+    return pm_id
+
+
+def get_personal_medications(user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT pm_id, name, dosage, notes, barcode, added_date "
+        "FROM personal_medications WHERE user_id=? ORDER BY added_date DESC",
+        (user_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+def get_personal_medication_by_barcode(user_id, barcode):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT pm_id, name, dosage, notes FROM personal_medications "
+        "WHERE user_id=? AND barcode=?",
+        (user_id, barcode)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+
+def delete_personal_medication(pm_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM personal_medications WHERE pm_id=?", (pm_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_all_users():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT user_id, username, role, health_notes FROM users ORDER BY username"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
 def get_health_notes(user_id):
     conn = get_db()
     cursor = conn.cursor()

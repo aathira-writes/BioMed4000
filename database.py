@@ -94,6 +94,19 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS personal_medications (
+        pm_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER NOT NULL,
+        name        TEXT NOT NULL,
+        dosage      TEXT,
+        notes       TEXT,
+        barcode     TEXT,
+        added_date  TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(user_id)
+    )
+    """)
+
     # Migrate existing tables with new columns (safe on repeated runs)
     migrations = [
         "ALTER TABLE inventory ADD COLUMN barcode TEXT",
